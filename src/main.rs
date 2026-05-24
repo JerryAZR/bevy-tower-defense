@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_ecs_tilemap::prelude::*;
 
 #[derive(Component)]
 struct MapTile;
@@ -8,71 +9,82 @@ struct PathTile;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(
+            DefaultPlugins
+                .set(ImagePlugin::default_nearest()),
+        )
+        .add_plugins(TilemapPlugin)
         .add_systems(Startup, setup)
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2d);
 
-    let texture = asset_server.load("Tilesheet/towerDefense_tilesheet.png");
-    let layout = TextureAtlasLayout::from_grid(UVec2::splat(64), 23, 13, None, None);
-    let atlas_layout = texture_atlas_layouts.add(layout);
+    let texture_handle: Handle<Image> = asset_server.load("Tilesheet/towerDefense_tilesheet.png");
 
-    let cols = 15;
-    let rows = 10;
-    let tile_size = 64.0;
+    let map_size = TilemapSize { x: 15, y: 10 };
+    let tile_size = TilemapTileSize { x: 64.0, y: 64.0 };
+    let grid_size = tile_size.into();
+    let map_type = TilemapType::Square;
 
-    let offset_x = -(cols as f32 * tile_size) / 2.0 + tile_size / 2.0;
-    let offset_y = -(rows as f32 * tile_size) / 2.0 + tile_size / 2.0;
+    let tilemap_entity = commands.spawn_empty().id();
+    let mut tile_storage = TileStorage::empty(map_size);
 
-    let path_mid = rows / 2;
+    let path_mid = map_size.y / 2;
 
-    for row in 0..rows {
-        for col in 0..cols {
-            let x = offset_x + col as f32 * tile_size;
-            let y = offset_y + row as f32 * tile_size;
+    for x in 0..map_size.x {
+        for y in 0..map_size.y {
+            let tile_pos = TilePos { x, y };
 
-            let tile_index = match (row, col) {
+            let tile_index = match (y, x) {
                 // Lower road edge (visually below the road body)
-                (r, 0) if r == path_mid - 1 => 125,   // bottom-left corner
-                (r, c) if r == path_mid - 1 && c == cols - 1 => 127, // bottom-right corner
-                (r, _) if r == path_mid - 1 => 126,    // bottom edge
+                (r, 0) if r == path_mid - 1 => 125,
+                (r, c) if r == path_mid - 1 && c == map_size.x - 1 => 127,
+                (r, _) if r == path_mid - 1 => 126,
 
                 // Road body
-                (r, 0) if r == path_mid => 102,       // left edge
-                (r, c) if r == path_mid && c == cols - 1 => 104, // right edge
-                (r, _) if r == path_mid => 103,       // road body
+                (r, 0) if r == path_mid => 102,
+                (r, c) if r == path_mid && c == map_size.x - 1 => 104,
+                (r, _) if r == path_mid => 103,
 
                 // Upper road edge (visually above the road body)
-                (r, 0) if r == path_mid + 1 => 79,    // upper-left corner
-                (r, c) if r == path_mid + 1 && c == cols - 1 => 81, // upper-right corner
-                (r, _) if r == path_mid + 1 => 80,    // top edge
+                (r, 0) if r == path_mid + 1 => 79,
+                (r, c) if r == path_mid + 1 && c == map_size.x - 1 => 81,
+                (r, _) if r == path_mid + 1 => 80,
 
                 // Everything else is grass
                 _ => 129,
             };
 
-            let mut entity = commands.spawn((
-                Sprite::from_atlas_image(
-                    texture.clone(),
-                    TextureAtlas {
-                        layout: atlas_layout.clone(),
-                        index: tile_index,
+            let tile_entity = commands
+                .spawn((
+                    TileBundle {
+                        position: tile_pos,
+                        tilemap_id: TilemapId(tilemap_entity),
+                        texture_index: TileTextureIndex(tile_index),
+                        ..Default::default()
                     },
-                ),
-                Transform::from_xyz(x, y, 0.0),
-                MapTile,
-            ));
+                    MapTile,
+                ))
+                .id();
 
             if tile_index != 129 {
-                entity.insert(PathTile);
+                commands.entity(tile_entity).insert(PathTile);
             }
+
+            tile_storage.set(&tile_pos, tile_entity);
         }
     }
+
+    commands.entity(tilemap_entity).insert(TilemapBundle {
+        grid_size,
+        map_type,
+        size: map_size,
+        storage: tile_storage,
+        texture: TilemapTexture::Single(texture_handle),
+        tile_size,
+        anchor: TilemapAnchor::Center,
+        ..Default::default()
+    });
 }
