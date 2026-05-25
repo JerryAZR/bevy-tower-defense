@@ -2,6 +2,7 @@ mod level;
 mod map;
 mod tiling;
 mod enemy;
+mod tower;
 
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
@@ -10,13 +11,16 @@ use level::{LevelData, build_map_from_level, load_level};
 use map::{MapLayout, MapTile, PathTile, TileType};
 use tiling::{TileRules, build_rules};
 use enemy::{Enemy, PathFollower, MoveSpeed, move_enemies, cleanup_finished_enemies};
+use tower::{PlacedTowers, setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
-        .add_systems(Startup, (load_level_data, spawn_tilemap, spawn_test_enemy).chain())
+        .init_resource::<PlacedTowers>()
+        .add_systems(Startup, (load_level_data, setup_tower_atlas, spawn_tilemap, spawn_test_enemy, spawn_placement_preview).chain())
         .add_systems(FixedUpdate, (move_enemies, cleanup_finished_enemies))
+        .add_systems(Update, (update_placement_preview, place_tower_on_click))
         .run();
 }
 
