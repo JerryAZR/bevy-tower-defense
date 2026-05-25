@@ -1,0 +1,15 @@
+[map]
+width = 15
+height = 10
+
+[[paths]]
+id = "main_road"
+waypoints = [
+    [2, 9],
+    [2, 5],
+    [12, 5],
+    [12, 1],
+]
+
+[[waves]]
+# Reserved for Part 6: wave definitions

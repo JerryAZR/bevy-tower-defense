@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 bevy = "0.18.1"
 bevy_ecs_tilemap = "0.18.1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
