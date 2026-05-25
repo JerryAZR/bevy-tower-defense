@@ -6,22 +6,33 @@ use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
 use level::{build_map_from_level, load_level};
-use map::{MapTile, PathTile, TileType};
-use tiling::build_rules;
+use map::{MapLayout, MapTile, PathTile, TileType};
+use tiling::{TileRules, build_rules};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (load_level_data, spawn_tilemap).chain())
         .run();
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn load_level_data(mut commands: Commands) {
     let level = load_level("assets/levels/level_01.toml");
     let map = build_map_from_level(&level);
     let rules = build_rules();
 
+    commands.insert_resource(map);
+    commands.insert_resource(rules);
+    commands.insert_resource(level);
+}
+
+fn spawn_tilemap(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    map: Res<MapLayout>,
+    rules: Res<TileRules>,
+) {
     commands.spawn(Camera2d);
 
     let texture_handle: Handle<Image> =
@@ -75,9 +86,4 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         anchor: TilemapAnchor::Center,
         ..Default::default()
     });
-
-    // Make map, rules, and level data available to future systems.
-    commands.insert_resource(map);
-    commands.insert_resource(rules);
-    commands.insert_resource(level);
 }
