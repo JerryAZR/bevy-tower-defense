@@ -1,10 +1,12 @@
+mod level;
 mod map;
 mod tiling;
 
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
-use map::{MapLayout, MapTile, PathTile, TileType};
+use level::{build_map_from_level, load_level};
+use map::{MapTile, PathTile, TileType};
 use tiling::build_rules;
 
 fn main() {
@@ -16,7 +18,8 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let map = build_demo_map();
+    let level = load_level("assets/levels/level_01.toml");
+    let map = build_map_from_level(&level);
     let rules = build_rules();
 
     commands.spawn(Camera2d);
@@ -73,37 +76,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         ..Default::default()
     });
 
-    // Make map and rules available to future systems.
+    // Make map, rules, and level data available to future systems.
     commands.insert_resource(map);
     commands.insert_resource(rules);
-}
-
-/// Build a demo map: grass everywhere with a 3-tile-high horizontal strip of path tiles.
-fn build_demo_map() -> MapLayout {
-    let width: u32 = 15;
-    let height: u32 = 10;
-    let path_y = height / 2;
-
-    let mut tiles = vec![TileType::Grass; (width * height) as usize];
-
-    let has_top = path_y > 0;
-    let has_bot = path_y < height - 1;
-    let w = width as usize;
-
-    for x in 0..width {
-        let idx = (path_y * width + x) as usize;
-        tiles[idx] = TileType::Path;
-        if has_top {
-            tiles[idx - w] = TileType::Path;
-        }
-        if has_bot {
-            tiles[idx + w] = TileType::Path;
-        }
-    }
-
-    MapLayout {
-        width,
-        height,
-        tiles,
-    }
+    commands.insert_resource(level);
 }

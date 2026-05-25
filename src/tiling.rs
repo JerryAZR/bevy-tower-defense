@@ -130,7 +130,12 @@ pub fn build_rules() -> TileRules {
         TileType::Path,
         TileTypeRuleset {
             rules: vec![
-                // Corners (most specific)
+                // Inner corners
+                rule(pat(same, same, same, same, same, same, diff, same), 82),   // upper-left
+                rule(pat(same, same, same, same, same, same, same, diff), 83),   // upper-right
+                rule(pat(same, same, same, same, diff, same, same, same), 105),  // bottom-left
+                rule(pat(same, same, same, same, same, diff, same, same), 106),  // bottom-right
+                // Corners
                 rule(pat(diff, same, same, diff, any, diff, any, any), 79),   // upper-left
                 rule(pat(diff, same, diff, same, diff, any, any, any), 81),   // upper-right
                 rule(pat(same, diff, same, diff, any, any, any, diff), 125),  // bottom-left
