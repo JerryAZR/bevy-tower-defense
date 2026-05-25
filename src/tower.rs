@@ -3,9 +3,16 @@ use std::collections::HashSet;
 
 use crate::enemy::tile_to_world;
 use crate::map::{MapLayout, TileType};
+use crate::enemy::{Enemy, Health, PathFollower};
 
 const TOWER_BASE: usize = 180;
 const TOWER_TOP: usize = 203;
+
+const ATTACK_RANGE: f32 = 192.0;
+const DAMAGE: f32 = 34.0;
+const ATTACK_COOLDOWN: f32 = 0.5;
+const FIRE_SPRITE: usize = 295;
+const MUZZLE_FLASH_DURATION: f32 = 0.15;
 
 #[derive(Component)]
 pub struct Tower;
@@ -15,6 +22,21 @@ pub(crate) struct TowerTurret;
 
 #[derive(Component)]
 pub(crate) struct TowerPreview;
+
+#[derive(Component)]
+pub(crate) struct AttackRange(pub f32);
+
+#[derive(Component)]
+pub(crate) struct Damage(pub f32);
+
+#[derive(Component)]
+pub(crate) struct AttackTimer(pub Timer);
+
+#[derive(Component)]
+pub(crate) struct DespawnTimer(pub Timer);
+
+#[derive(Component)]
+pub(crate) struct MuzzleFlash;
 
 #[derive(Resource)]
 pub struct TowerAtlas {
@@ -154,7 +176,93 @@ pub fn place_tower_on_click(
             TextureAtlas { layout: atlas.layout.clone(), index: TOWER_TOP },
         ),
         Transform::from_xyz(pos.x, pos.y, 2.1),
+        AttackRange(ATTACK_RANGE),
+        Damage(DAMAGE),
+        AttackTimer(Timer::from_seconds(ATTACK_COOLDOWN, TimerMode::Repeating)),
     ));
+}
+
+pub fn attack_enemies(
+    time: Res<Time>,
+    atlas: Res<TowerAtlas>,
+    mut turrets: Query<(Entity, &mut Transform, &mut AttackTimer, &Damage, &AttackRange), (With<TowerTurret>, Without<Enemy>)>,
+    mut enemies: Query<(Entity, &Transform, &mut Health), (With<Enemy>, With<PathFollower>, Without<TowerTurret>)>,
+    mut commands: Commands,
+) {
+    // Snapshot enemy positions, then release the query borrow.
+    let enemy_positions: Vec<(Entity, Vec2)> = enemies
+        .iter()
+        .map(|(e, t, _)| (e, t.translation.truncate()))
+        .collect();
+
+    for (turret_entity, mut turret_transform, mut timer, damage, range) in turrets.iter_mut() {
+        timer.0.tick(time.delta());
+        let turret_pos = turret_transform.translation.truncate();
+
+        // Find nearest enemy within range
+        let mut nearest: Option<(Entity, f32)> = None;
+        for &(entity, pos) in &enemy_positions {
+            let dist = turret_pos.distance(pos);
+            if dist <= range.0 {
+                if nearest.map_or(true, |(_, best)| dist < best) {
+                    nearest = Some((entity, dist));
+                }
+            }
+        }
+
+        if let Some((target, _)) = nearest {
+            let direction = enemy_positions.iter()
+                .find(|(e, _)| *e == target)
+                .map(|(_, p)| *p - turret_pos)
+                .unwrap_or(Vec2::X);
+            let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
+            turret_transform.rotation = Quat::from_rotation_z(angle);
+
+            if timer.0.just_finished() {
+                if let Ok((_, _, mut health)) = enemies.get_mut(target) {
+                    health.0 -= damage.0;
+                    if health.0 <= 0.0 {
+                        commands.entity(target).despawn();
+                    }
+                }
+
+                // Muzzle flash: two fire sprites as children of the turret.
+                // Offset (x_offset, 32.0) places them at the two barrel tips.
+                let texture = atlas.texture.clone();
+                let layout = atlas.layout.clone();
+                let mut flash_id = None;
+                commands.entity(turret_entity).with_children(|turret_children| {
+                    flash_id = Some(turret_children.spawn((MuzzleFlash, DespawnTimer(Timer::from_seconds(MUZZLE_FLASH_DURATION, TimerMode::Once)), Transform::default(), Visibility::default())).id());
+                });
+                if let Some(flash_id) = flash_id {
+                    commands.entity(flash_id).with_children(|flash_children| {
+                        for i in 0..2 {
+                            let x_offset = if i == 0 {-6.0} else {6.0};
+                            flash_children.spawn((Sprite::from_atlas_image(
+                                texture.clone(),
+                                TextureAtlas { layout: layout.clone(), index: FIRE_SPRITE },
+                            ),
+                                Transform::from_xyz(x_offset, 32.0, 2.2),
+                            ));
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
+pub fn despawn_timed(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut DespawnTimer)>
+ ) {
+    for (entity, mut timer) in query.iter_mut() {
+        timer.0.tick(time.delta());
+        if timer.0.just_finished() {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 fn world_to_tile(world: Vec2, map_width: u32, map_height: u32) -> Option<[u32; 2]> {

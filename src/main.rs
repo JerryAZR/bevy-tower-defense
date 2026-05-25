@@ -10,8 +10,8 @@ use bevy_ecs_tilemap::prelude::*;
 use level::{LevelData, build_map_from_level, load_level};
 use map::{MapLayout, MapTile, PathTile, TileType};
 use tiling::{TileRules, build_rules};
-use enemy::{Enemy, PathFollower, MoveSpeed, move_enemies, cleanup_finished_enemies};
-use tower::{PlacedTowers, setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click};
+use enemy::{Enemy, Health, PathFollower, MoveSpeed, move_enemies, cleanup_finished_enemies};
+use tower::{PlacedTowers, setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed};
 
 fn main() {
     App::new()
@@ -19,8 +19,8 @@ fn main() {
         .add_plugins(TilemapPlugin)
         .init_resource::<PlacedTowers>()
         .add_systems(Startup, (load_level_data, setup_tower_atlas, spawn_tilemap, spawn_test_enemy, spawn_placement_preview).chain())
-        .add_systems(FixedUpdate, (move_enemies, cleanup_finished_enemies))
-        .add_systems(Update, (update_placement_preview, place_tower_on_click))
+        .add_systems(FixedUpdate, (move_enemies, attack_enemies, cleanup_finished_enemies).chain())
+        .add_systems(Update, (update_placement_preview, place_tower_on_click, despawn_timed))
         .run();
 }
 
@@ -138,5 +138,6 @@ fn spawn_test_enemy(
             target,
         },
         MoveSpeed(192.0),
+        Health(100.0),
     ));
 }

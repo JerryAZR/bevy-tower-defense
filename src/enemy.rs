@@ -15,6 +15,9 @@ pub struct PathFollower {
 #[derive(Component)]
 pub struct MoveSpeed(pub f32);
 
+#[derive(Component)]
+pub struct Health(pub f32);
+
 pub fn move_enemies(
     mut commands: Commands,
     mut query: Query<(Entity, &mut PathFollower, &mut Transform, &MoveSpeed), With<Enemy>>,
