@@ -1,0 +1,49 @@
+[map]
+width = 15
+height = 10
+
+[paths.main_road]
+waypoints = [
+    [13, 9],
+    [13, 5],
+    [2, 5],
+    [2, 1],
+]
+
+[enemy_types.soldier]
+sprite = 245
+speed = 192.0
+health = 100.0
+
+[enemy_types.runner]
+sprite = 246
+speed = 320.0
+health = 60.0
+
+[enemy_types.heavy]
+sprite = 247
+speed = 96.0
+health = 300.0
+
+[enemy_types.scout]
+sprite = 248
+speed = 160.0
+health = 80.0
+
+[[waves]]
+start_time = 0.0
+path = "main_road"
+spawn_interval = 0.8
+enemies = [
+    { type = "runner", count = 4 },
+    { type = "scout", count = 3 },
+]
+
+[[waves]]
+start_time = 10.0
+path = "main_road"
+spawn_interval = 1.0
+enemies = [
+    { type = "soldier", count = 3 },
+    { type = "heavy", count = 2 },
+]

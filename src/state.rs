@@ -13,6 +13,12 @@ pub struct BaseLives(pub i32);
 #[derive(Resource)]
 pub struct GameFinished;
 
+#[derive(Resource, Default)]
+pub struct AvailableLevels(pub Vec<String>);
+
+#[derive(Resource)]
+pub struct SelectedLevel(pub String);
+
 #[derive(Component)]
 pub struct GameEntity;
 

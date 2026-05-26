@@ -6,11 +6,11 @@ use crate::level::{LevelData, build_map_from_level, load_level};
 use crate::map::{MapLayout, MapTile, PathTile, TileType};
 use crate::tiling::{TileRules, build_rules};
 use crate::enemy::build_spawn_schedule;
-use crate::state::BaseLives;
+use crate::state::{BaseLives, SelectedLevel};
 use crate::tower::PlacedTowers;
 
-pub fn load_level_data(mut commands: Commands) {
-    let level = load_level("assets/levels/level_01.toml");
+pub fn load_level_data(mut commands: Commands, selected: Res<SelectedLevel>) {
+    let level = load_level(&selected.0);
     let map = build_map_from_level(&level);
     let rules = build_rules();
 
