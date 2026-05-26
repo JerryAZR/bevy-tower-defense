@@ -3,8 +3,7 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::level::LevelData;
-use crate::GameEntity;
-use crate::{GameState, GameResult};
+use crate::state::{GameEntity, GameState, GameResult, BaseLives, GameFinished};
 
 #[derive(Component)]
 pub struct Enemy;
@@ -22,11 +21,7 @@ pub struct MoveSpeed(pub f32);
 #[derive(Component)]
 pub struct Health(pub f32);
 
-#[derive(Resource)]
-pub struct BaseLives(pub i32);
 
-#[derive(Resource)]
-pub struct GameFinished;
 
 pub struct SpawnEvent {
     time: f32,
@@ -150,7 +145,7 @@ pub fn move_enemies(
         if distance <= 0.01 {
             // Snap distance: avoid division by zero / atan2 instability when
             // the enemy is already on (or extremely close to) the target tile.
-            // Already at target — advance immediately.
+            // Already at target -- advance immediately.
             advance_waypoint(&mut commands, entity, &mut follower, &level, map_width, map_height);
             continue;
         }
@@ -225,12 +220,12 @@ pub fn check_game_state(
         return;
     }
     if lives.0 <= 0 {
-        info!("Game Over — the base has been destroyed!");
+        info!("Game Over -- the base has been destroyed!");
         commands.insert_resource(GameResult::Defeat);
         commands.insert_resource(GameFinished);
         next_state.set(GameState::GameOver);
     } else if schedule.events.is_empty() && alive.iter().count() == 0 {
-        info!("Victory — all enemies defeated!");
+        info!("Victory -- all enemies defeated!");
         commands.insert_resource(GameResult::Victory);
         commands.insert_resource(GameFinished);
         next_state.set(GameState::GameOver);

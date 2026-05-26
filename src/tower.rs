@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use crate::enemy::tile_to_world;
 use crate::map::{MapLayout, TileType};
 use crate::enemy::{Enemy, Health, PathFollower};
-use crate::GameEntity;
+use crate::state::GameEntity;
 
 const TOWER_BASE: usize = 180;
 const TOWER_TOP: usize = 203;

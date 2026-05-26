@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{GameState, ScreenUi};
+use crate::state::{GameState, ScreenUi};
 
 pub fn setup_level_select(mut commands: Commands) {
     commands
@@ -16,7 +16,7 @@ pub fn setup_level_select(mut commands: Commands) {
         ))
         .with_children(|parent| {
             parent.spawn((
-                Text::new("Press [1] — Level 1"),
+                Text::new("Press [1] -- Level 1"),
                 TextFont {
                     font_size: 40.0,
                     ..default()

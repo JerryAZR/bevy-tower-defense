@@ -1,14 +1,14 @@
 use bevy::prelude::*;
 
-use crate::{GameState, GameResult, ScreenUi};
+use crate::state::{GameState, GameResult, ScreenUi};
 
 pub fn setup_game_over(
     mut commands: Commands,
     result: Res<GameResult>,
 ) {
     let message = match *result {
-        GameResult::Defeat => "Game Over — the base was destroyed!",
-        GameResult::Victory => "Victory — all enemies defeated!",
+        GameResult::Defeat => "Game Over -- the base was destroyed!",
+        GameResult::Victory => "Victory -- all enemies defeated!",
     };
 
     commands
