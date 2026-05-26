@@ -6,6 +6,7 @@ use crate::map::MapLayout;
 use crate::tiling::TileRules;
 use crate::level::LevelData;
 use crate::enemy::SpawnSchedule;
+use crate::economy::Gold;
 
 #[derive(Resource)]
 pub struct BaseLives(pub i32);
@@ -54,6 +55,7 @@ pub fn cleanup_level(
     commands.remove_resource::<PlacedTowers>();
     commands.remove_resource::<BaseLives>();
     commands.remove_resource::<GameFinished>();
+    commands.remove_resource::<Gold>();
 }
 
 pub fn cleanup_screen_ui(mut commands: Commands, query: Query<Entity, With<ScreenUi>>) {

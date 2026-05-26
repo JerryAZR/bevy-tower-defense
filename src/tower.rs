@@ -5,6 +5,7 @@ use crate::enemy::tile_to_world;
 use crate::map::{MapLayout, TileType};
 use crate::enemy::{Enemy, Health, PathFollower};
 use crate::state::GameEntity;
+use crate::economy::{Gold, Bounty, PlacementDenied, TOWER_COST, DENIED_FLASH_DURATION};
 
 const TOWER_BASE: usize = 180;
 const TOWER_TOP: usize = 203;
@@ -115,25 +116,41 @@ pub fn update_placement_preview(
     camera: Single<(&Camera, &GlobalTransform)>,
     map_layout: Res<MapLayout>,
     placed: Res<PlacedTowers>,
-    mut preview_q: Query<(&mut Transform, &mut Visibility), With<TowerPreview>>,
+    gold: Res<Gold>,
+    // We need &mut Sprite to tint the preview red on denied placement.
+    // Option<&PlacementDenied> tells us whether the flash is active.
+    mut preview_q: Query<(&mut Transform, &mut Visibility, &mut Sprite, Option<&PlacementDenied>), With<TowerPreview>>,
 ) {
     let (cam, cam_transform) = *camera;
 
     let Some(tile) = hovered_placeable_tile(
         &window, &cam, &cam_transform, &map_layout, &placed,
     ) else {
-        for (_, mut vis) in preview_q.iter_mut() {
+        for (_, mut vis, ..) in preview_q.iter_mut() {
             *vis = Visibility::Hidden;
         }
         return;
     };
 
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
+    // Preview is green when affordable, white when neutral, red when denied.
+    let can_afford = gold.0 >= TOWER_COST as f32;
 
-    for (mut transform, mut vis) in preview_q.iter_mut() {
+    for (mut transform, mut vis, mut sprite, denied) in preview_q.iter_mut() {
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
         *vis = Visibility::Visible;
+
+        if denied.is_some() {
+            // Red flash — the player just tried to place a tower they can't afford.
+            sprite.color = Color::srgba(1.0, 0.3, 0.3, 0.5);
+        } else if can_afford {
+            // Green tint to signal "you can place here."
+            sprite.color = Color::srgba(0.3, 1.0, 0.3, 0.5);
+        } else {
+            // White/neutral — tile is valid but player lacks gold.
+            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.5);
+        }
     }
 }
 
@@ -144,7 +161,10 @@ pub fn place_tower_on_click(
     camera: Single<(&Camera, &GlobalTransform)>,
     map_layout: Res<MapLayout>,
     mut placed: ResMut<PlacedTowers>,
+    mut gold: ResMut<Gold>,
     atlas: Res<TowerAtlas>,
+    // Query preview entities so we can attach the PlacementDenied flash.
+    preview_q: Query<Entity, With<TowerPreview>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -158,6 +178,21 @@ pub fn place_tower_on_click(
         return;
     };
 
+    // Check affordability — if the player can't pay, flash the preview red
+    // instead of silently ignoring the click.
+    if gold.0 < TOWER_COST as f32 {
+        for preview_entity in preview_q.iter() {
+            commands.entity(preview_entity).insert(PlacementDenied(
+                Timer::from_seconds(DENIED_FLASH_DURATION, TimerMode::Once),
+            ));
+        }
+        return;
+    }
+
+    // Deduct the cost *before* spawning the tower so the player can't
+    // accidentally place two towers on one click (the second would fail
+    // the affordability check).
+    gold.0 -= TOWER_COST as f32;
     placed.0.insert(tile);
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
@@ -172,7 +207,7 @@ pub fn place_tower_on_click(
         Transform::from_xyz(pos.x, pos.y, 2.0),
     ));
 
-    // Turret (rotates in Part 9, z=2.1)
+    // Turret (rotates during targeting, z=2.1)
     commands.spawn((
         TowerTurret,
         GameEntity,
@@ -190,14 +225,16 @@ pub fn place_tower_on_click(
 pub fn attack_enemies(
     time: Res<Time>,
     atlas: Res<TowerAtlas>,
+    mut gold: ResMut<Gold>,
     mut turrets: Query<(Entity, &mut Transform, &mut AttackTimer, &Damage, &AttackRange), (With<TowerTurret>, Without<Enemy>)>,
-    mut enemies: Query<(Entity, &Transform, &mut Health), (With<Enemy>, With<PathFollower>, Without<TowerTurret>)>,
+    // Include Bounty so we can reward the player on kill.
+    mut enemies: Query<(Entity, &Transform, &mut Health, &Bounty), (With<Enemy>, With<PathFollower>, Without<TowerTurret>)>,
     mut commands: Commands,
 ) {
     // Snapshot enemy positions, then release the query borrow.
     let enemy_positions: Vec<(Entity, Vec2)> = enemies
         .iter()
-        .map(|(e, t, _)| (e, t.translation.truncate()))
+        .map(|(e, t, ..)| (e, t.translation.truncate()))
         .collect();
 
     for (turret_entity, mut turret_transform, mut timer, damage, range) in turrets.iter_mut() {
@@ -224,11 +261,14 @@ pub fn attack_enemies(
             turret_transform.rotation = Quat::from_rotation_z(angle);
 
             if timer.0.just_finished() {
-                if let Ok((_, _, mut health)) = enemies.get_mut(target) {
+                // Deal damage and collect bounty if the enemy dies.
+                if let Ok((entity, _, mut health, bounty)) = enemies.get_mut(target) {
                     if health.0 > 0.0 {
                         health.0 -= damage.0;
                         if health.0 <= 0.0 {
-                            commands.entity(target).despawn();
+                            // Enemy killed — award its bounty to the player.
+                            gold.0 += bounty.0 as f32;
+                            commands.entity(entity).despawn();
                         }
                     }
                 }

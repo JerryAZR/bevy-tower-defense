@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 
 use crate::level::LevelData;
 use crate::state::{GameEntity, GameState, GameResult, BaseLives, GameFinished};
+use crate::economy::Bounty;
 
 #[derive(Component)]
 pub struct Enemy;
@@ -28,6 +29,9 @@ pub struct SpawnEvent {
     sprite: usize,
     speed: f32,
     health: f32,
+    /// Bounty awarded when this enemy is killed.  Copied from
+    /// the enemy type definition in the level TOML.
+    bounty: u32,
     path: String,
 }
 
@@ -56,6 +60,7 @@ pub fn build_spawn_schedule(
                     sprite: def.sprite,
                     speed: def.speed,
                     health: def.health,
+                    bounty: def.bounty,
                     path: wave.path.clone(),
                 });
                 time += wave.spawn_interval;
@@ -122,7 +127,10 @@ pub fn spawn_wave_enemies(
                 target,
             },
             MoveSpeed(event.speed),
+            // Bounty is attached as a component so the tower attack system
+            // can read it when the enemy dies.
             Health(event.health),
+            Bounty(event.bounty),
             GameEntity,
         ));
     }

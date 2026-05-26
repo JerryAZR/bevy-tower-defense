@@ -7,7 +7,7 @@ mod state;
 mod gameplay;
 mod level_select;
 mod game_over;
-
+mod economy;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
@@ -17,6 +17,7 @@ use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, handle_level_select_input};
 use game_over::{setup_game_over, handle_game_over_input};
+use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied};
 
 fn main() {
     App::new()
@@ -39,6 +40,7 @@ fn main() {
             setup_spawn_schedule,
             spawn_tilemap,
             spawn_placement_preview,
+            spawn_gold_hud,
         ).chain())
         .add_systems(OnExit(GameState::InGame), cleanup_level)
         .add_systems(FixedUpdate, (
@@ -47,11 +49,14 @@ fn main() {
             attack_enemies,
             process_base_reachers,
             check_game_state,
+            earn_passive_income,
         ).chain().run_if(in_state(GameState::InGame)))
         .add_systems(Update, (
             update_placement_preview,
             place_tower_on_click,
             despawn_timed,
+            update_gold_hud,
+            tick_placement_denied,
         ).run_if(in_state(GameState::InGame)))
         // ---------- GameOver ----------
         .add_systems(OnEnter(GameState::GameOver), setup_game_over)

@@ -8,6 +8,7 @@ use crate::tiling::{TileRules, build_rules};
 use crate::enemy::build_spawn_schedule;
 use crate::state::{BaseLives, SelectedLevel};
 use crate::tower::PlacedTowers;
+use crate::economy::{Gold, STARTING_GOLD};
 
 pub fn load_level_data(mut commands: Commands, selected: Res<SelectedLevel>) {
     let level = load_level(&selected.0);
@@ -19,6 +20,9 @@ pub fn load_level_data(mut commands: Commands, selected: Res<SelectedLevel>) {
     commands.insert_resource(level);
     commands.insert_resource(PlacedTowers::default());
     commands.insert_resource(BaseLives(5));
+    // Each level starts with a fixed amount of gold.  The player earns
+    // more by killing enemies and through passive income.
+    commands.insert_resource(Gold(STARTING_GOLD));
 }
 
 pub fn spawn_tilemap(

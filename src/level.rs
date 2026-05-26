@@ -31,6 +31,11 @@ pub struct EnemyTypeDef {
     pub sprite: usize,
     pub speed: f32,
     pub health: f32,
+    /// Gold awarded to the player when this enemy is killed.
+    /// Different enemy types can have different bounties — tougher
+    /// enemies reward more.  Defaults to 0 if omitted from the TOML.
+    #[serde(default)]
+    pub bounty: u32,
 }
 
 #[derive(Debug, Deserialize)]
