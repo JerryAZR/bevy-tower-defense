@@ -3,6 +3,8 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::level::LevelData;
+use crate::GameEntity;
+use crate::{GameState, GameResult};
 
 #[derive(Component)]
 pub struct Enemy;
@@ -23,8 +25,8 @@ pub struct Health(pub f32);
 #[derive(Resource)]
 pub struct BaseLives(pub i32);
 
-#[derive(Resource, Default)]
-pub struct GameOver;
+#[derive(Resource)]
+pub struct GameFinished;
 
 pub struct SpawnEvent {
     time: f32,
@@ -79,15 +81,11 @@ pub fn build_spawn_schedule(
 }
 
 pub fn spawn_wave_enemies(
-    game_over: Option<Res<GameOver>>,
     mut schedule: ResMut<SpawnSchedule>,
     mut commands: Commands,
     level: Res<LevelData>,
     time: Res<Time>,
 ) {
-    if game_over.is_some() {
-        return;
-    }
     schedule.elapsed += time.delta_secs();
 
     while let Some(event) = schedule.events.front() {
@@ -130,6 +128,7 @@ pub fn spawn_wave_enemies(
             },
             MoveSpeed(event.speed),
             Health(event.health),
+            GameEntity,
         ));
     }
 }
@@ -216,21 +215,24 @@ pub fn process_base_reachers(
 
 pub fn check_game_state(
     mut commands: Commands,
+    finished: Option<Res<GameFinished>>,
     lives: Res<BaseLives>,
     schedule: Res<SpawnSchedule>,
     alive: Query<(), With<Enemy>>,
-    mut finished: Local<bool>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
-    if *finished {
+    if finished.is_some() {
         return;
     }
     if lives.0 <= 0 {
         info!("Game Over — the base has been destroyed!");
-        commands.insert_resource(GameOver);
-        *finished = true;
+        commands.insert_resource(GameResult::Defeat);
+        commands.insert_resource(GameFinished);
+        next_state.set(GameState::GameOver);
     } else if schedule.events.is_empty() && alive.iter().count() == 0 {
         info!("Victory — all enemies defeated!");
-        commands.insert_resource(GameOver);
-        *finished = true;
+        commands.insert_resource(GameResult::Victory);
+        commands.insert_resource(GameFinished);
+        next_state.set(GameState::GameOver);
     }
 }

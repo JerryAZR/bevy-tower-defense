@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use crate::enemy::tile_to_world;
 use crate::map::{MapLayout, TileType};
 use crate::enemy::{Enemy, Health, PathFollower};
+use crate::GameEntity;
 
 const TOWER_BASE: usize = 180;
 const TOWER_TOP: usize = 203;
@@ -95,12 +96,14 @@ pub fn spawn_placement_preview(
 
     commands.spawn((
         TowerPreview,
+        GameEntity,
         tinted(TOWER_BASE),
         Transform::from_xyz(0.0, 0.0, 2.0),
         Visibility::Hidden,
     ));
     commands.spawn((
         TowerPreview,
+        GameEntity,
         tinted(TOWER_TOP),
         Transform::from_xyz(0.0, 0.0, 2.1),
         Visibility::Hidden,
@@ -161,6 +164,7 @@ pub fn place_tower_on_click(
     // Base (static, z=2.0)
     commands.spawn((
         Tower,
+        GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
             TextureAtlas { layout: atlas.layout.clone(), index: TOWER_BASE },
@@ -171,6 +175,7 @@ pub fn place_tower_on_click(
     // Turret (rotates in Part 9, z=2.1)
     commands.spawn((
         TowerTurret,
+        GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
             TextureAtlas { layout: atlas.layout.clone(), index: TOWER_TOP },
@@ -234,7 +239,7 @@ pub fn attack_enemies(
                 let layout = atlas.layout.clone();
                 let mut flash_id = None;
                 commands.entity(turret_entity).with_children(|turret_children| {
-                    flash_id = Some(turret_children.spawn((MuzzleFlash, DespawnTimer(Timer::from_seconds(MUZZLE_FLASH_DURATION, TimerMode::Once)), Transform::default(), Visibility::default())).id());
+                    flash_id = Some(turret_children.spawn((MuzzleFlash, GameEntity, DespawnTimer(Timer::from_seconds(MUZZLE_FLASH_DURATION, TimerMode::Once)), Transform::default(), Visibility::default())).id());
                 });
                 if let Some(flash_id) = flash_id {
                     commands.entity(flash_id).with_children(|flash_children| {
