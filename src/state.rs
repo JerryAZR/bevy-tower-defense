@@ -1,6 +1,7 @@
 use crate::tower::PlacedTowers;
 
 use bevy::prelude::*;
+use bevy::ecs::system::entity_command::despawn;
 
 use crate::map::MapLayout;
 use crate::tiling::TileRules;
@@ -46,7 +47,10 @@ pub fn cleanup_level(
     entities: Query<Entity, With<GameEntity>>,
 ) {
     for entity in &entities {
-        commands.entity(entity).despawn();
+        // queue_silenced(despawn()) silently ignores double-despawn
+        // errors — useful when child entities may have been auto-
+        // despawned by a parent earlier in this same iteration.
+        commands.entity(entity).queue_silenced(despawn());
     }
     commands.remove_resource::<MapLayout>();
     commands.remove_resource::<TileRules>();

@@ -123,13 +123,61 @@ fn cleanup_level(
 }
 ```
 
+### Entity hierarchy and double-despawn
+
+There is a subtle bug in the naive `cleanup_level` above.  Some game entities
+are **children** of other entities.  When we added muzzle flash effects in
+Part 9, we spawned the flash container as a child of the turret.  Both the
+turret and its flash children get `GameEntity`.
+
+When `cleanup_level` iterates all `GameEntity` entities and despawns a turret
+(the parent), Bevy **automatically despawns its children**.  But those children
+are still in the iteration — when the loop reaches them, their despawn command
+fails because the entity no longer exists.  This produces a warning:
+
+```
+Entity despawned: The entity with ID 179v11 is invalid
+```
+
+When the game ends in victory, the last turret shot almost certainly happened
+within the last 0.15 s, so a muzzle flash entity is alive.  On defeat, it depends
+on timing — but victory alone is enough to trigger it reliably.  Note that this
+only happens because the muzzle flash entity carries `GameEntity`.
+
+The fix uses `queue_silenced`, which wraps a command and silently ignores
+errors.  The standalone `despawn()` function from `bevy::ecs::system::entity_command`
+returns an `EntityCommand` that `queue_silenced` accepts:
+
+```rust
+use bevy::ecs::system::entity_command::despawn;
+
+fn cleanup_level(
+    mut commands: Commands,
+    entities: Query<Entity, With<GameEntity>>,
+) {
+    for entity in &entities {
+        // queue_silenced(despawn()) silently ignores double-despawn
+        // errors — useful when child entities may have been auto-
+        // despawned by a parent earlier in this same iteration.
+        commands.entity(entity).queue_silenced(despawn());
+    }
+    // ... remove resources ...
+}
+```
+We chose `queue_silenced` here for demonstration.  It's a solid option when
+post-despawn commands can be dropped harmlessly — the entity is already gone,
+which is exactly the state we want.  Alternatives are equally valid: not
+adding `GameEntity` to child entities, or filtering the query with
+`Without<ChildOf>`.  For completeness, Bevy also provides `queue_handled`,
+which takes an error handler `fn(BevyError, ErrorContext)` when you need to
+inspect the failure rather than just silence it.
+
 Resources are removed separately — `OnEnter(InGame)` re-inserts fresh copies on replay.
 
 ### What persists
 
 `TowerAtlas` (texture + atlas layout) lives across levels — loaded once in `OnEnter(LevelSelect)`. `Camera2d` is spawned once in `Startup`. `GameResult` survives `OnExit(InGame)` so `GameOver` can read it.
 
----
 
 ## LevelSelect screen
 
