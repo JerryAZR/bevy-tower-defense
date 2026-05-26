@@ -9,3 +9,42 @@ waypoints = [
     [12, 5],
     [12, 1],
 ]
+
+[enemy_types.soldier]
+sprite = 245
+speed = 192.0
+health = 100.0
+
+[enemy_types.runner]
+sprite = 246
+speed = 320.0
+health = 60.0
+
+[enemy_types.heavy]
+sprite = 247
+speed = 96.0
+health = 300.0
+
+[enemy_types.scout]
+sprite = 248
+speed = 160.0
+health = 80.0
+
+[[waves]]
+start_time = 0.0
+path = "main_road"
+spawn_interval = 1.0
+enemies = [
+    { type = "soldier", count = 3 },
+    { type = "runner", count = 2 },
+]
+
+[[waves]]
+start_time = 12.0
+path = "main_road"
+spawn_interval = 1.2
+enemies = [
+    { type = "soldier", count = 2 },
+    { type = "scout", count = 2 },
+    { type = "heavy", count = 1 },
+]

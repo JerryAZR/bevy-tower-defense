@@ -9,8 +9,10 @@ pub struct LevelData {
     pub map: MapData,
     pub paths: HashMap<String, PathData>,
     #[serde(default)]
+    pub enemy_types: HashMap<String, EnemyTypeDef>,
+    #[serde(default)]
     #[allow(dead_code)]
-    pub waves: Vec<WaveData>,
+    pub waves: Vec<WaveDef>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,9 +26,29 @@ pub struct PathData {
     pub waypoints: Vec<[u32; 2]>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct EnemyTypeDef {
+    pub sprite: usize,
+    pub speed: f32,
+    pub health: f32,
+}
+
 #[derive(Debug, Deserialize)]
-pub struct WaveData {
-    // Reserved for Part 7
+pub struct WaveDef {
+    pub start_time: f32,
+    pub path: String,
+    #[serde(default = "default_spawn_interval")]
+    pub spawn_interval: f32,
+    pub enemies: Vec<WaveEnemyGroup>,
+}
+
+fn default_spawn_interval() -> f32 { 1.0 }
+
+#[derive(Debug, Deserialize)]
+pub struct WaveEnemyGroup {
+    #[serde(rename = "type")]
+    pub enemy_type: String,
+    pub count: u32,
 }
 
 /// Load a level definition from a TOML file.

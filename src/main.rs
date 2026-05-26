@@ -10,7 +10,7 @@ use bevy_ecs_tilemap::prelude::*;
 use level::{LevelData, build_map_from_level, load_level};
 use map::{MapLayout, MapTile, PathTile, TileType};
 use tiling::{TileRules, build_rules};
-use enemy::{Enemy, Health, PathFollower, MoveSpeed, move_enemies, cleanup_finished_enemies};
+use enemy::{build_spawn_schedule, spawn_wave_enemies, move_enemies, cleanup_finished_enemies};
 use tower::{PlacedTowers, setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed};
 
 fn main() {
@@ -18,8 +18,8 @@ fn main() {
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
         .init_resource::<PlacedTowers>()
-        .add_systems(Startup, (load_level_data, setup_tower_atlas, spawn_tilemap, spawn_test_enemy, spawn_placement_preview).chain())
-        .add_systems(FixedUpdate, (move_enemies, attack_enemies, cleanup_finished_enemies).chain())
+        .add_systems(Startup, (load_level_data, setup_tower_atlas, setup_spawn_schedule, spawn_tilemap, spawn_placement_preview).chain())
+        .add_systems(FixedUpdate, (spawn_wave_enemies, move_enemies, attack_enemies, cleanup_finished_enemies).chain())
         .add_systems(Update, (update_placement_preview, place_tower_on_click, despawn_timed))
         .run();
 }
@@ -95,49 +95,12 @@ fn spawn_tilemap(
     });
 }
 
-fn spawn_test_enemy(
+fn setup_spawn_schedule(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     level: Res<LevelData>,
 ) {
-    let texture = asset_server.load("Tilesheet/towerDefense_tilesheet.png");
-    let layout = TextureAtlasLayout::from_grid(UVec2::splat(64), 23, 13, None, None);
-    let atlas_layout = texture_atlas_layouts.add(layout);
-
-    let waypoints = &level.paths["main_road"].waypoints;
-    let spawn_tile = waypoints[0];
-    let target_tile = waypoints[1];
-
-    let tile_size = 64.0;
-    let map_width = level.map.width as f32;
-    let map_height = level.map.height as f32;
-    let origin_x = -map_width * tile_size / 2.0 + tile_size / 2.0;
-    let origin_y = -map_height * tile_size / 2.0 + tile_size / 2.0;
-
-    let x = origin_x + spawn_tile[0] as f32 * tile_size;
-    let y = origin_y + spawn_tile[1] as f32 * tile_size;
-    let target = Vec2::new(
-        origin_x + target_tile[0] as f32 * tile_size,
-        origin_y + target_tile[1] as f32 * tile_size,
-    );
-
-    commands.spawn((
-        Sprite::from_atlas_image(
-            texture,
-            TextureAtlas {
-                layout: atlas_layout,
-                index: 245,
-            },
-        ),
-        Transform::from_xyz(x, y, 1.0),
-        Enemy,
-        PathFollower {
-            path_id: "main_road".to_string(),
-            waypoint_index: 1,
-            target,
-        },
-        MoveSpeed(192.0),
-        Health(100.0),
-    ));
+    let schedule = build_spawn_schedule(&level, &asset_server, &mut texture_atlas_layouts);
+    commands.insert_resource(schedule);
 }

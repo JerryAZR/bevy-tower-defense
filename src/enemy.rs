@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+use std::collections::VecDeque;
+
 use crate::level::LevelData;
 
 #[derive(Component)]
@@ -17,6 +19,110 @@ pub struct MoveSpeed(pub f32);
 
 #[derive(Component)]
 pub struct Health(pub f32);
+
+pub struct SpawnEvent {
+    time: f32,
+    sprite: usize,
+    speed: f32,
+    health: f32,
+    path: String,
+}
+
+#[derive(Resource)]
+pub struct SpawnSchedule {
+    events: VecDeque<SpawnEvent>,
+    elapsed: f32,
+    texture: Handle<Image>,
+    atlas: Handle<TextureAtlasLayout>,
+}
+
+pub fn build_spawn_schedule(
+    level: &LevelData,
+    asset_server: &AssetServer,
+    texture_atlas_layouts: &mut Assets<TextureAtlasLayout>,
+) -> SpawnSchedule {
+    let mut events: Vec<SpawnEvent> = Vec::new();
+
+    for wave in &level.waves {
+        let mut time = wave.start_time;
+        for group in &wave.enemies {
+            let def = &level.enemy_types[&group.enemy_type];
+            for _ in 0..group.count {
+                events.push(SpawnEvent {
+                    time,
+                    sprite: def.sprite,
+                    speed: def.speed,
+                    health: def.health,
+                    path: wave.path.clone(),
+                });
+                time += wave.spawn_interval;
+            }
+        }
+    }
+
+    events.sort_by(|a, b| a.time.total_cmp(&b.time));
+
+    SpawnSchedule {
+        events: events.into(),
+        elapsed: 0.0,
+        texture: asset_server.load("Tilesheet/towerDefense_tilesheet.png"),
+        atlas: texture_atlas_layouts.add(
+            TextureAtlasLayout::from_grid(UVec2::splat(64), 23, 13, None, None)
+        ),
+    }
+}
+
+pub fn spawn_wave_enemies(
+    mut schedule: ResMut<SpawnSchedule>,
+    mut commands: Commands,
+    level: Res<LevelData>,
+    time: Res<Time>,
+) {
+    schedule.elapsed += time.delta_secs();
+
+    while let Some(event) = schedule.events.front() {
+        if event.time > schedule.elapsed {
+            break;
+        }
+        let event = schedule.events.pop_front().unwrap();
+
+        let waypoints = &level.paths[&event.path].waypoints;
+        let spawn_tile = waypoints[0];
+        let target_tile = waypoints[1];
+
+        let map_width = level.map.width as f32;
+        let map_height = level.map.height as f32;
+        let tile_size = 64.0;
+        let origin_x = -map_width * tile_size / 2.0 + tile_size / 2.0;
+        let origin_y = -map_height * tile_size / 2.0 + tile_size / 2.0;
+
+        let x = origin_x + spawn_tile[0] as f32 * tile_size;
+        let y = origin_y + spawn_tile[1] as f32 * tile_size;
+        let target = Vec2::new(
+            origin_x + target_tile[0] as f32 * tile_size,
+            origin_y + target_tile[1] as f32 * tile_size,
+        );
+
+        commands.spawn((
+            Sprite::from_atlas_image(
+                schedule.texture.clone(),
+                TextureAtlas {
+                    layout: schedule.atlas.clone(),
+                    index: event.sprite,
+                },
+            ),
+            Transform::from_xyz(x, y, 1.0),
+            Enemy,
+            PathFollower {
+                path_id: event.path,
+                waypoint_index: 1,
+                target,
+            },
+            MoveSpeed(event.speed),
+            Health(event.health),
+        ));
+    }
+}
 
 pub fn move_enemies(
     mut commands: Commands,
