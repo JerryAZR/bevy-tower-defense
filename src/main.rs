@@ -10,7 +10,7 @@ use bevy_ecs_tilemap::prelude::*;
 use level::{LevelData, build_map_from_level, load_level};
 use map::{MapLayout, MapTile, PathTile, TileType};
 use tiling::{TileRules, build_rules};
-use enemy::{build_spawn_schedule, spawn_wave_enemies, move_enemies, cleanup_finished_enemies};
+use enemy::{build_spawn_schedule, spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state, BaseLives};
 use tower::{PlacedTowers, setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed};
 
 fn main() {
@@ -18,8 +18,9 @@ fn main() {
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
         .init_resource::<PlacedTowers>()
+        .insert_resource(BaseLives(5))
         .add_systems(Startup, (load_level_data, setup_tower_atlas, setup_spawn_schedule, spawn_tilemap, spawn_placement_preview).chain())
-        .add_systems(FixedUpdate, (spawn_wave_enemies, move_enemies, attack_enemies, cleanup_finished_enemies).chain())
+        .add_systems(FixedUpdate, (spawn_wave_enemies, move_enemies, attack_enemies, process_base_reachers, check_game_state).chain())
         .add_systems(Update, (update_placement_preview, place_tower_on_click, despawn_timed))
         .run();
 }

@@ -146,15 +146,19 @@ Same `atan2` + `Quat::from_rotation_z` pattern from Part 7, but with a `- π/2` 
 ```rust
 if timer.0.just_finished() {
     if let Ok((_, _, mut health)) = enemies.get_mut(target) {
-        health.0 -= damage.0;
-        if health.0 <= 0.0 {
-            commands.entity(target).despawn();
+        if health.0 > 0.0 {
+            health.0 -= damage.0;
+            if health.0 <= 0.0 {
+                commands.entity(target).despawn();
+            }
         }
     }
 }
 ```
 
 `get_mut` returns the full query tuple `(Entity, &Transform, &mut Health)`. We destructure with `(_, _, mut health)` to get just the `Health`. `just_finished()` returns `true` on exactly one tick per cooldown cycle.
+
+The `health.0 > 0.0` guard prevents a **double-despawn** bug: when two turrets target the same enemy in the same tick, the first turret queues a despawn command, and the second skips the already-dead enemy instead of issuing a duplicate despawn that would trigger an entity-invalid warning.
 
 Despawn is inlined — no separate system needed. Dead enemies with `PathFollower` still have it, and `cleanup_finished_enemies` won't touch them because they're already gone.
 

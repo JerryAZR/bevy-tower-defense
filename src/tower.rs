@@ -220,9 +220,11 @@ pub fn attack_enemies(
 
             if timer.0.just_finished() {
                 if let Ok((_, _, mut health)) = enemies.get_mut(target) {
-                    health.0 -= damage.0;
-                    if health.0 <= 0.0 {
-                        commands.entity(target).despawn();
+                    if health.0 > 0.0 {
+                        health.0 -= damage.0;
+                        if health.0 <= 0.0 {
+                            commands.entity(target).despawn();
+                        }
                     }
                 }
 

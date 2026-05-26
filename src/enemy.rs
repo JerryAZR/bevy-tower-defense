@@ -20,6 +20,12 @@ pub struct MoveSpeed(pub f32);
 #[derive(Component)]
 pub struct Health(pub f32);
 
+#[derive(Resource)]
+pub struct BaseLives(pub i32);
+
+#[derive(Resource, Default)]
+pub struct GameOver;
+
 pub struct SpawnEvent {
     time: f32,
     sprite: usize,
@@ -73,11 +79,15 @@ pub fn build_spawn_schedule(
 }
 
 pub fn spawn_wave_enemies(
+    game_over: Option<Res<GameOver>>,
     mut schedule: ResMut<SpawnSchedule>,
     mut commands: Commands,
     level: Res<LevelData>,
     time: Res<Time>,
 ) {
+    if game_over.is_some() {
+        return;
+    }
     schedule.elapsed += time.delta_secs();
 
     while let Some(event) = schedule.events.front() {
@@ -193,11 +203,34 @@ pub fn tile_to_world(tile: [u32; 2], map_width: f32, map_height: f32) -> Vec2 {
     )
 }
 
-pub fn cleanup_finished_enemies(
+pub fn process_base_reachers(
     mut commands: Commands,
+    mut lives: ResMut<BaseLives>,
     query: Query<Entity, (With<Enemy>, Without<PathFollower>)>,
 ) {
     for entity in &query {
+        lives.0 -= 1;
         commands.entity(entity).despawn();
+    }
+}
+
+pub fn check_game_state(
+    mut commands: Commands,
+    lives: Res<BaseLives>,
+    schedule: Res<SpawnSchedule>,
+    alive: Query<(), With<Enemy>>,
+    mut finished: Local<bool>,
+) {
+    if *finished {
+        return;
+    }
+    if lives.0 <= 0 {
+        info!("Game Over — the base has been destroyed!");
+        commands.insert_resource(GameOver);
+        *finished = true;
+    } else if schedule.events.is_empty() && alive.iter().count() == 0 {
+        info!("Victory — all enemies defeated!");
+        commands.insert_resource(GameOver);
+        *finished = true;
     }
 }
