@@ -13,11 +13,16 @@ This is a tutorial project. Code and prose must teach, not just work.
 
 ### Tutorial Structure
 
-Each tutorial document (`tutorial/XX-topic.md`) should follow this structure:
+:books: See `tutorial/TEMPLATE.md` for the canonical tutorial structure, section descriptions, and writing rules.
 
-1. **Instruction** — what we will build and why it matters.
-2. **New Bevy APIs** — introduce any new concepts, types, or patterns, along with common pitfalls.
-3. **Walkthrough** — step-by-step code changes with explanations of what each piece does and why it's there.
+:spiral_notepad: In short, every tutorial part should contain:
+1. **Recap** — what the project already has (one sentence for continuity).
+2. **Goal** — what we will build in this part and why it matters.
+3. **New Bevy APIs & Concepts** — introduce the concepts the reader should *learn* before they appear in code. Include common pitfalls.
+4. **Walkthrough** — step-by-step changes. Explain the intent first, then show short illustrative code snippets.
+5. **Summary** — bullet-point recap and a preview of the next part.
+
+When creating a new tutorial, start from `tutorial/TEMPLATE.md` and remove the inline comments.
 
 ### Assumed Knowledge
 
