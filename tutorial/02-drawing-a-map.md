@@ -207,7 +207,7 @@ struct MapTile;
 struct PathTile;
 ```
 
-Then attach them during spawning:
+`commands.spawn(...)` returns an `EntityCommands` handle — a temporary reference to the entity we just created. We can use that handle to queue additional changes before the frame ends. Here we spawn every tile with `MapTile`, then conditionally add `PathTile` only for the road tiles:
 
 ```rust
             let mut entity = commands.spawn((
