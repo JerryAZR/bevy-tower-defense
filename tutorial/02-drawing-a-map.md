@@ -110,7 +110,11 @@ Bevy counts indices left-to-right, top-to-bottom. Index `0` is the top-left tile
 
 ### Step 3: Spawn Tiles in a Grid
 
-With the atlas ready, we iterate over rows and columns, compute a world position for each tile, and decide which atlas index to use.
+With the atlas ready, we loop over every cell in the grid, compute its screen position, decide which tile it should display, and spawn a sprite there. We will build this in three pieces: the grid constants, the position math, and the tile selection.
+
+#### Grid constants and centering
+
+First, define the grid size and tile size. We then compute offsets so the grid is centered on the world origin — the same point our camera looks at:
 
 ```rust
     let cols = 15;
@@ -119,7 +123,17 @@ With the atlas ready, we iterate over rows and columns, compute a world position
 
     let offset_x = -(cols as f32 * tile_size) / 2.0 + tile_size / 2.0;
     let offset_y = -(rows as f32 * tile_size) / 2.0 + tile_size / 2.0;
+```
 
+The offsets shift the grid so its center sits at `(0, 0)`. Without them, the grid would start at the origin and extend only into positive coordinates, leaving most of it off the bottom-left of the screen.
+
+#### Position and tile selection
+
+For each row and column, we calculate the tile's world position. We also pick a `tile_index` based on which row we're in: three rows form the road, and everything else is grass.
+
+The road sits in the middle of the grid. `path_mid` is the center row; the rows above and below it become the road edges. In Bevy, **positive Y points up**, so `path_mid + 1` is visually *above* the road and `path_mid - 1` is *below* it. If you swap these, the road will appear upside-down.
+
+```rust
     let path_mid = rows / 2; // 5 for a 10-row grid
 
     for row in 0..rows {
@@ -146,7 +160,15 @@ With the atlas ready, we iterate over rows and columns, compute a world position
                 // Everything else is grass
                 _ => 129,
             };
+```
 
+The `match` uses guard clauses like `if r == path_mid` to select the right atlas index. Corner tiles are at the left and right ends of the edge rows; body tiles fill the middle. The catch-all `_ => 129` covers every cell that is not part of the road.
+
+#### Spawning each tile
+
+Finally, we spawn a sprite at the calculated position. `Sprite::from_atlas_image` takes the texture handle and a `TextureAtlas` that points to our layout and the chosen index. We also attach a `Transform` to place the sprite in the world:
+
+```rust
             commands.spawn((
                 Sprite::from_atlas_image(
                     texture.clone(),
@@ -162,32 +184,18 @@ With the atlas ready, we iterate over rows and columns, compute a world position
 }
 ```
 
-#### Centering the grid
+`texture.clone()` and `atlas_layout.clone()` copy only the internal handle IDs — not the actual image data — so calling them inside the loop is cheap.
 
-`offset_x` and `offset_y` shift the entire grid so its center sits at the world origin `(0, 0)` — the same point our `Camera2d` looks at by default. Without this offset, the grid would start at `(0, 0)` and extend only into positive coordinates, leaving most of it off the bottom-left of the screen.
 
-#### Bevy's Y-is-up coordinate system
+### Step 4: Remember Which Tiles Are Roads
 
-This is the most common source of confusion for newcomers:
+Spawning 150 bare sprites works for rendering, but our gameplay systems will need to know which tiles are walkable road and which are buildable grass. There are several ways to store this information.
 
-- **Positive Y points UP.**
-- **Negative Y points DOWN.**
-- **Positive X points RIGHT.**
-- **Negative X points LEFT.**
+One approach is to keep a separate data structure — a 2D array or a `HashMap<(i32, i32), TileKind>` — where you look up a tile's type by its grid coordinates. This is fast for point queries: "is position (5, 3) a path tile?"
 
-That means if `row` increases, the tile moves **higher** on screen. Our road has three rows:
+Another approach, which fits Bevy's ECS naturally, is to attach **marker components** to the entities themselves. The strength of this approach is not point lookups but **set queries**: "give me *all* path tiles" or "give me every map tile with a transform." Bevy can answer these efficiently because the ECS stores components in contiguous arrays.
 
-| Code row | Visual position | Tiles |
-|---|---|---|
-| `path_mid + 1` (row 6) | **Above** the road center | 79, 80, 81 (upper edge) |
-| `path_mid` (row 5) | Road center | 102, 103, 104 (body) |
-| `path_mid - 1` (row 4) | **Below** the road center | 125, 126, 127 (lower edge) |
-
-If you swap the upper and lower edge rows, the road appears upside-down — corners and shading will look wrong.
-
-### Step 4: Tag Tiles with Marker Components
-
-Spawning 150 bare sprites works, but we cannot tell which ones are path tiles and which are grass without searching by position. We will attach marker components so future systems can query them easily.
+You can even maintain both if your game needs both patterns. For now, we will use marker components because enemy spawning and tower placement both need to iterate over entire categories of tiles.
 
 Add these definitions at the top of `main.rs`:
 
@@ -219,7 +227,6 @@ Now any system can ask the ECS:
 - "Give me all map tiles" → `Query<&Transform, With<MapTile>>`
 
 This will be essential when we spawn enemies that must follow the road, or when we let players place towers only on grass.
-
 ### Simplification: Individual Sprites vs. Tilemaps
 
 For a `15×10` grid, spawning one sprite entity per tile is fine. Every `commands.spawn(...)` creates an ECS entity with a `Sprite`, `Transform`, and other rendering components. That is 150 entities going through the full sprite pipeline.
