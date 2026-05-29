@@ -189,13 +189,13 @@ Finally, we spawn a sprite at the calculated position. `Sprite::from_atlas_image
 
 ### Step 4: Remember Which Tiles Are Roads
 
-Spawning 150 bare sprites works for rendering, but our gameplay systems will need to know which tiles are walkable road and which are buildable grass. There are several ways to store this information.
+Spawning 150 bare sprites works for rendering, but our gameplay systems will eventually need to distinguish walkable road from buildable grass. There are several ways to store this information.
 
 One approach is to keep a separate data structure — a 2D array or a `HashMap<(i32, i32), TileKind>` — where you look up a tile's type by its grid coordinates. This is fast for point queries: "is position (5, 3) a path tile?"
 
 Another approach, which fits Bevy's ECS naturally, is to attach **marker components** to the entities themselves. The strength of this approach is not point lookups but **set queries**: "give me *all* path tiles" or "give me every map tile with a transform." Bevy can answer these efficiently because the ECS stores components in contiguous arrays.
 
-You can even maintain both if your game needs both patterns. For now, we will use marker components because enemy spawning and tower placement both need to iterate over entire categories of tiles.
+You can even maintain both if your game needs both patterns. In this tutorial we will use marker components as a clean, ECS-idiomatic way to label our tiles. We will not use them immediately in the next few parts — enemies will spawn at predefined locations and towers will be placed by checking the tile under the mouse — but the pattern is essential once you start writing gameplay systems that need to reason about the map.
 
 Add these definitions at the top of `main.rs`:
 
@@ -226,7 +226,6 @@ Now any system can ask the ECS:
 - "Give me all path tiles" → `Query<&Transform, With<PathTile>>`
 - "Give me all map tiles" → `Query<&Transform, With<MapTile>>`
 
-This will be essential when we spawn enemies that must follow the road, or when we let players place towers only on grass.
 ### Simplification: Individual Sprites vs. Tilemaps
 
 For a `15×10` grid, spawning one sprite entity per tile is fine. Every `commands.spawn(...)` creates an ECS entity with a `Sprite`, `Transform`, and other rendering components. That is 150 entities going through the full sprite pipeline.
