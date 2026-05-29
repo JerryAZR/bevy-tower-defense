@@ -1,54 +1,85 @@
 # Part 2: Drawing a Map — From One Sprite to a Grid of Tiles
 
-In Part 1 we got a single red square on screen. In this part we replace it with a real map: a grass field with a dirt road running through it. Along the way, we will learn how Bevy handles sprite atlases, how 2D coordinates work, and why spawning 150 individual sprites is only the first step toward a proper tilemap pipeline.
+> **Time to read:** ~20 minutes  
+> **New concepts:** `AssetServer`, `Res`, `ResMut`, `TextureAtlasLayout`, `TextureAtlas`, `Component`, `Transform`  
+> **Prerequisite:** Part 1 (a minimal Bevy app with a window, camera, and red square)
 
 ---
 
-## What we will build
+## Recap: What We Already Have
 
-A `15×10` grid of tiles centered on screen:
+We have a minimal Bevy app that opens a window, spawns a 2D camera, and renders a red square at the origin. We know how to create an `App`, register `DefaultPlugins`, and run a `Startup` system that uses `Commands` to spawn entities.
 
-- **Grass** fills the background.
-- A **3-tile-high dirt road** cuts horizontally across the middle.
-- The road uses **corner, edge, and body tiles** so it looks like a continuous path rather than a solid rectangle.
+---
+
+## Goal: What We Will Build
+
+We will replace the single red square with a real map: a `15×10` grid of tiles centered on the screen. The grid will have:
+
+- **Grass** filling the background.
+- A **3-tile-high dirt road** cutting horizontally across the middle.
+- **Corner, edge, and body tiles** so the road looks like a continuous path rather than a solid rectangle.
 
 Later in the series, enemies will travel along that road.
 
 ---
 
-## Asset housekeeping
+## New Bevy APIs & Concepts
 
-Before we write code, we clean up the raw asset pack. Asset packs usually ship with individual slices, vector sources, and alternate resolutions. For our project we only need:
+### `Res<T>` and `ResMut<T>`
 
+In Bevy, a **resource** is a global singleton that lives in the ECS world but is not attached to any specific entity. Any number of systems can read the same resource at the same time, making resources the natural place for data that needs to be shared across your game: the game clock, the current score, the asset loader, or the storage that holds all your texture atlases.
+
+When you write a system that needs to read a resource — for example, asking the `AssetServer` to load a texture — you add `Res<AssetServer>` as a parameter. Bevy notices the type and injects the correct resource automatically.
+
+When you need to *change* a resource — for example, registering a newly created `TextureAtlasLayout` into the asset storage — you use `ResMut<Assets<TextureAtlasLayout>>` instead. The `Mut` tells Bevy you need write access, and Bevy's scheduler ensures no other system tries to write to the same resource at the same time.
+
+In this part we will use both: `Res<AssetServer>` to load the tilesheet, and `ResMut<Assets<TextureAtlasLayout>>` to store the atlas layout we build from it.
+### `AssetServer`
+
+`AssetServer` is a Bevy *resource* that handles loading images, sounds, fonts, and other files. Because it is a resource, you access it inside a system with `Res<AssetServer>`. It runs on a background thread so your game does not stall while a texture uploads to the GPU. The path you pass to `load(...)` is relative to the `assets/` folder.
+
+Because loading is asynchronous, the texture is not immediately available in GPU memory. For simple 2D sprites, Bevy queues the draw commands and renders the sprite as soon as the asset finishes loading.
+### `TextureAtlasLayout` and `TextureAtlas`
+
+A **tilesheet** is one large image that contains many smaller images arranged in a grid. Our tilesheet has 23 columns and 13 rows of 64×64 tiles. To use individual tiles, we need to tell Bevy how the sheet is divided so it can extract the right piece for each sprite.
+
+`TextureAtlasLayout` does exactly that: it stores the "recipe" for slicing the sheet — tile size, columns, rows, and any padding between tiles. You create the layout, register it in Bevy's asset storage (`Assets<TextureAtlasLayout>`), and get back a handle.
+
+`TextureAtlas` is the component you attach to each sprite entity. It holds two things: a handle to the layout (so the sprite knows which sheet to look at) and an index (so it knows which tile to extract). When Bevy renders the sprite, it uses the layout to calculate which rectangle of the source image to draw.
+
+**Pitfall:** Indices are counted left-to-right, top-to-bottom. Index `0` is the top-left tile, index `22` is the top-right of the first row, and index `23` is the leftmost tile of the second row. It is easy to miscount when eyeballing a tilesheet.
+
+### `Component`
+
+A *component* is a Rust struct or enum that gets attached to an entity. Components are plain data — no behavior, just state. Bevy's ECS lets you query for all entities that have a specific set of components.
+
+You define a component by deriving the `Component` trait:
+
+```rust
+#[derive(Component)]
+struct MapTile;
 ```
-assets/
-├── License.txt
-├── Preview.png
-└── Tilesheet/
-    └── towerDefense_tilesheet.png
-```
 
-Removing the `PNG/` folder (299 individual tiles) and the `Vector/` folder keeps the project focused. If you ever need the raw slices, the original Kenney pack is still available online.
+Marker components like `MapTile` have no fields; their mere presence on an entity is enough to identify it in a query.
+
+### `Transform`
+
+`Transform` describes where an entity is in the world: its translation (position), rotation, and scale. For 2D games we mostly care about `Transform::from_xyz(x, y, z)`, where `z` controls draw order (higher values draw on top). We will use `Transform` to place each tile at its calculated grid position.
 
 ---
 
-## Texture atlases: one image, many sprites
+## Walkthrough
 
-The tilesheet is a single `1472×832` PNG that contains a `23×13` grid of `64×64` tiles. Rather than loading 299 separate textures, we load the sheet once and tell Bevy how to slice it.
+### Step 1: Download the Asset Pack
 
-A **texture atlas** is exactly that: one GPU texture plus a lookup table of rectangles. Each rectangle is an **index** you can reference when spawning a sprite.
+We will use the [Tower Defense (Top Down)](https://kenney.nl/assets/tower-defense-top-down) asset pack by Kenney. Place the `Tilesheet/towerDefense_tilesheet.png` file into your project's `assets/` folder so Bevy can find it.
 
----
+The tilesheet is a single `1472×832` PNG that contains a `23×13` grid of `64×64` tiles. Rather than loading hundreds of individual textures, we load the sheet once and tell Bevy how to slice it.
 
-## Updating `setup`
+### Step 2: Load the Tilesheet and Build the Atlas Layout
 
-Our `setup` system now needs to do more than spawn a camera. It needs to:
-
-1. Load the tilesheet texture.
-2. Build an atlas layout describing the grid.
-3. Loop over grid coordinates and spawn the right tile at each position.
-
-### Loading the texture and building the atlas layout
+Our `setup` system now needs two new parameters to handle assets. Bevy will inject them automatically because their types are registered as resources:
 
 ```rust
 fn setup(
@@ -63,35 +94,21 @@ fn setup(
     let atlas_layout = texture_atlas_layouts.add(layout);
 ```
 
-Let's unpack the new parameters.
+`TextureAtlasLayout::from_grid` takes five arguments:
 
-### `asset_server: Res<AssetServer>`
+| Argument | Value | Meaning |
+|---|---|---|
+| `tile_size` | `UVec2::splat(64)` | Each tile is 64×64 pixels. |
+| `columns` | `23` | 23 tiles across. |
+| `rows` | `13` | 13 tiles down. |
+| `padding` | `None` | No gaps between tiles. |
+| `offset` | `None` | Starts at the top-left corner. |
 
-`AssetServer` is a Bevy resource that handles loading images, sounds, fonts, and other assets. It runs on a background thread so your game does not stall while a texture uploads to the GPU. The path you pass is relative to the `assets/` folder.
+Bevy counts indices left-to-right, top-to-bottom. Index `0` is the top-left tile, index `22` is the top-right of the first row, index `23` is the leftmost tile of the second row, and so on.
 
-`Res<AssetServer>` gives us read-only access. Because loading is asynchronous, the texture is not immediately available in GPU memory, but for simple 2D sprites Bevy queues the draw commands and renders the sprite as soon as the asset finishes loading.
+`asset_server.load(...)` returns a cheap `Handle<Image>` — cloning it later just copies an internal ID, not the texture data. Same for the atlas layout handle.
 
-### `texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>`
-
-`Assets<T>` is Bevy's generic asset storage. `TextureAtlasLayout` is not an image — it is pure data that describes how a texture is divided into sub-rectangles. We create one with `from_grid(...)`, then register it in the asset storage with `.add(...)`. The returned handle is what we attach to each sprite so it knows which rectangle to sample.
-
-### `TextureAtlasLayout::from_grid`
-
-```rust
-TextureAtlasLayout::from_grid(
-    tile_size,      // UVec2::splat(64)  → 64×64 pixels
-    columns,        // 23 tiles across
-    rows,           // 13 tiles down
-    padding,        // None  → no gaps between tiles
-    offset,         // None  → starts at the top-left corner
-)
-```
-
-Bevy counts indices left-to-right, top-to-bottom. So index `0` is the top-left tile, index `22` is the top-right of the first row, index `23` is the leftmost tile of the second row, and so on.
-
----
-
-## Spawning tiles in a grid
+### Step 3: Spawn Tiles in a Grid
 
 With the atlas ready, we iterate over rows and columns, compute a world position for each tile, and decide which atlas index to use.
 
@@ -145,17 +162,11 @@ With the atlas ready, we iterate over rows and columns, compute a world position
 }
 ```
 
----
+#### Centering the grid
 
-## Understanding the math
+`offset_x` and `offset_y` shift the entire grid so its center sits at the world origin `(0, 0)` — the same point our `Camera2d` looks at by default. Without this offset, the grid would start at `(0, 0)` and extend only into positive coordinates, leaving most of it off the bottom-left of the screen.
 
-### Centering the grid
-
-`offset_x` and `offset_y` shift the entire grid so its center sits at the world origin `(0, 0)` — the same point our `Camera2d` looks at by default.
-
-Without this offset, the grid would start at `(0, 0)` and extend only into positive coordinates, leaving most of it off the bottom-left of the screen.
-
-### Bevy's Y-is-up coordinate system
+#### Bevy's Y-is-up coordinate system
 
 This is the most common source of confusion for newcomers:
 
@@ -174,15 +185,11 @@ That means if `row` increases, the tile moves **higher** on screen. Our road has
 
 If you swap the upper and lower edge rows, the road appears upside-down — corners and shading will look wrong.
 
-### Why `texture.clone()` and `atlas_layout.clone()`?
+### Step 4: Tag Tiles with Marker Components
 
-`asset_server.load(...)` returns a cheap `Handle<Image>` — cloning it just copies an internal ID, not the texture data. Same for the atlas layout handle. We clone inside the loop so every tile references the same underlying assets.
+Spawning 150 bare sprites works, but we cannot tell which ones are path tiles and which are grass without searching by position. We will attach marker components so future systems can query them easily.
 
----
-
-## Tagging our tiles
-
-Spawning 150 bare sprites works, but we cannot tell which ones are path tiles and which are grass without searching by position. Let's attach marker components so future systems can query them easily.
+Add these definitions at the top of `main.rs`:
 
 ```rust
 #[derive(Component)]
@@ -213,23 +220,15 @@ Now any system can ask the ECS:
 
 This will be essential when we spawn enemies that must follow the road, or when we let players place towers only on grass.
 
----
+### Simplification: Individual Sprites vs. Tilemaps
 
-## What this code really does under the hood
+For a `15×10` grid, spawning one sprite entity per tile is fine. Every `commands.spawn(...)` creates an ECS entity with a `Sprite`, `Transform`, and other rendering components. That is 150 entities going through the full sprite pipeline.
 
-Every `commands.spawn(...)` call creates one ECS entity with:
-
-- `Sprite` — tells the renderer to draw a quad with the atlas sub-rectangle.
-- `Transform` — where in the world the quad is placed.
-- `GlobalTransform` — computed automatically from `Transform`.
-- `Visibility` — defaults to visible.
-- `Handle<Image>` and atlas data — which texture and which rectangle.
-
-That is **150 entities**, each going through the full sprite rendering pipeline. For a `15×10` grid this is fine. For a `100×100` map it would be wasteful — hence the tilemap plugin we will introduce in Part 3, which renders an entire grid in a single draw call.
+For a larger map — say `100×100` — this would be wasteful. A production tower defense game would use a **tilemap**, which renders an entire grid in a single draw call. We will introduce a tilemap plugin in Part 3. For now, individual sprites keep the code transparent: you can see exactly how each tile becomes an entity.
 
 ---
 
-## Running the project
+## Running the Project
 
 ```bash
 cargo run
@@ -245,16 +244,16 @@ If the road looks upside-down, double-check that your upper edge tiles (79, 80, 
 
 ---
 
-## Recap
+## Summary
 
 In this part we:
 
-1. Cleaned up the asset folder to keep only what we need.
-2. Learned what a **texture atlas** is and how Bevy slices it with `TextureAtlasLayout`.
-3. Used `AssetServer` to load the tilesheet asynchronously.
-4. Built a grid by computing world positions from row/column indices.
+1. Downloaded the [Tower Defense (Top Down)](https://kenney.nl/assets/tower-defense-top-down) tilesheet by Kenney.
+2. Used `AssetServer` to load the tilesheet asynchronously.
+3. Built a `TextureAtlasLayout` to slice the tilesheet into addressable tiles.
+4. Computed world positions from row/column indices to center the grid on screen.
 5. Internalized that **Bevy 2D uses Y-up coordinates**.
-6. Added marker components so tiles are queryable by future systems.
-7. Saw that 150 individual sprite entities work but hint at the need for a more efficient pipeline.
+6. Added `MapTile` and `PathTile` marker components so tiles are queryable by future systems.
+7. Saw that 150 individual sprite entities work for a small grid, but hinted at the need for a more efficient pipeline (tilemaps) later.
 
 In **Part 3** we will move from hand-rolled spawning to a data-driven approach: loading map layouts from external files and rendering them with a tilemap plugin.
