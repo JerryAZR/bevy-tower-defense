@@ -50,6 +50,20 @@ Keep explanations short. A paragraph or two per concept is enough. Link to the B
 ## Walkthrough
 
 Explain **what to do** and **why**. Code snippets should illustrate the explanation, not replace it. The reader should be able to understand the step *before* looking at the code block.
+### Designing the feature
+
+For non-trivial features, begin the walkthrough by describing the **player-visible behavior**. List the observable effects, then derive the components, resources, and constants needed to implement them. This teaches the reader to think in ECS terms — data follows behavior — before any code appears.
+
+> Example:  
+> Before writing code, think about what the player should see:  
+> 1. **Base and barrel** — a static base plus a rotating barrel that points toward enemies.  
+> 2. **Ammo on the barrel** — three small rockets sitting in visible slots.  
+> 3. **Depletion** — when the launcher fires, one slot becomes empty.  
+> 4. **Refill** — after a short delay, a new rocket appears in the first empty slot.  
+> 5. **Fire cooldown** — even with ammo present, the launcher can't dump all rockets instantly.  
+>  
+> From this we derive the data we need: a tag component `RocketLauncher`, a capacity constant `ROCKET_MAX_AMMO = 3`, a component `AmmoSlots`, and a timer component `AttackTimer`.
+
 
 ### Writing rules for this section
 
@@ -68,6 +82,12 @@ Explain **what to do** and **why**. Code snippets should illustrate the explanat
 - **No copy-pasteable walls.** If a complete file is useful for reference, put it in a collapsible `<details>` block at the *end* of the step, not inline.
 
 - **Explain the non-obvious.** Comment the *what* and *why* of non-obvious code in the snippets themselves. Obvious lines (e.g., `commands.spawn(Camera2d)`) do not need inline comments.
+
+- **Enumerate queries.** Every system section must list its queries and explain what each is for. If a query uses `Without<T>` filters, say why — usually to prove disjointness to Bevy or to exclude irrelevant entities.
+
+- **Prefer prose + source reference for large functions.** When a function exceeds ~15 lines, do not paste the entire body inline. Instead, explain what it does, what queries and resources it needs, and why it does it that way. Then point the reader to the source file: "See `pub fn foo` in `src/bar.rs` for the full implementation."
+
+- **Place observable checkpoints.** After each milestone where the reader can verify partial progress, add a `> **Run the game now.**` callout describing what they should see. This gives the reader confidence and catches mistakes early.
 
 ### Simplifications
 
