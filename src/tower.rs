@@ -60,8 +60,6 @@ pub(crate) struct AmmoSlots {
 #[derive(Component)]
 pub(crate) struct AmmoRegenTimer(pub Timer);
 
-#[derive(Component)]
-pub(crate) struct AttackCooldown(pub Timer);
 
 #[derive(Component)]
 pub(crate) struct Projectile {
@@ -246,7 +244,7 @@ fn spawn_rocket_launcher(
         ),
         Transform::from_xyz(pos.x, pos.y, 2.1),
         AttackRange(ATTACK_RANGE),
-        AttackCooldown(Timer::from_seconds(ATTACK_PAUSE_SECS, TimerMode::Repeating)),
+        AttackTimer(Timer::from_seconds(ATTACK_PAUSE_SECS, TimerMode::Repeating)),
         AmmoRegenTimer(Timer::from_seconds(AMMO_REFILL_SECS, TimerMode::Repeating)),
         AmmoSlots { slots: vec![None; ROCKET_MAX_AMMO as usize] },
     )).id();
@@ -437,7 +435,7 @@ pub fn refill_ammo(
 pub fn launch_rockets(
     time: Res<Time>,
     atlas: Res<TowerAtlas>,
-    mut turrets: Query<(Entity, &mut Transform, &mut AttackCooldown, &AttackRange, &mut AmmoSlots), (With<RocketLauncher>, Without<Enemy>)>,
+    mut turrets: Query<(Entity, &mut Transform, &mut AttackTimer, &AttackRange, &mut AmmoSlots), (With<RocketLauncher>, Without<Enemy>)>,
     enemies: Query<(Entity, &Transform), (With<Enemy>, With<PathFollower>, Without<TowerTurret>, Without<RocketLauncher>)>,
     slot_transforms: Query<&GlobalTransform>,
     mut commands: Commands,
@@ -447,8 +445,8 @@ pub fn launch_rockets(
         .map(|(e, t)| (e, t.translation.truncate()))
         .collect();
 
-    for (_turret_entity, mut turret_transform, mut cooldown, range, mut ammo) in turrets.iter_mut() {
-        cooldown.0.tick(time.delta());
+    for (_turret_entity, mut turret_transform, mut timer, range, mut ammo) in turrets.iter_mut() {
+        timer.0.tick(time.delta());
         let turret_pos = turret_transform.translation.truncate();
 
         let mut nearest: Option<(Entity, f32)> = None;
@@ -469,7 +467,7 @@ pub fn launch_rockets(
             let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
             turret_transform.rotation = Quat::from_rotation_z(angle);
 
-            if cooldown.0.just_finished() {
+            if timer.0.just_finished() {
                 let slot_idx = ammo.slots.iter().position(|s| s.is_some());
                 if let Some(idx) = slot_idx {
                     let ammo_entity = ammo.slots[idx].take().unwrap();
