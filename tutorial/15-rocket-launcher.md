@@ -1,7 +1,7 @@
 # Part 15: Rocket Launcher — Projectiles, Ammo, and Splash Damage
 
 > **Time to read:** ~12 minutes  
-> **New concepts:** `GlobalTransform`, entity references in components, `Without<T>` query disjointness  
+> **New concepts:** `GlobalTransform`, entity references in components
 > **Prerequisite:** Part 14 (gold economy)
 
 ---
@@ -40,10 +40,6 @@ In our case, ammo-slot rockets are children of the launcher barrel. Their `Trans
 `Projectile` stores `target: Entity` — the enemy it is chasing. This is a direct entity reference, not a query. Each frame, `move_projectiles` looks up that enemy's current `Transform` to update the projectile's destination.
 
 > **Pitfall:** If the target is despawned (e.g., killed by another tower), the `Entity` becomes invalid. We handle this gracefully: `enemies.get(projectile.target)` returns `Err`, and the projectile continues to its last-known position instead of panicking.
-
-### `Without<T>` for query disjointness
-
-Bevy requires proof that two queries in the same system don't overlap when one has `&mut` access. Adding `Without<Enemy>` to the projectile query and `Without<Projectile>` to the enemy query tells Bevy "no entity is both" — even though that is obvious to a human reader.
 
 ---
 
@@ -254,7 +250,7 @@ pub fn move_projectiles(
 }
 ```
 
-> **Note the `Without` filters.** Both queries access `Transform`, so Bevy needs explicit proof they don't overlap. `Without<Enemy>` on projectiles and `Without<Projectile>` on enemies makes them disjoint.
+> **Note the `Without` filters.** As in Part 9, both queries access `Transform` and one writes to it, so Bevy needs explicit proof they don't overlap. `Without<Enemy>` on projectiles and `Without<Projectile>` on enemies makes them disjoint.
 
 ### Explosion and splash damage
 
