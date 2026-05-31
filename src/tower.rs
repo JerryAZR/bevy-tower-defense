@@ -16,6 +16,18 @@ const ATTACK_COOLDOWN: f32 = 0.5;
 const FIRE_SPRITE: usize = 295;
 const MUZZLE_FLASH_DURATION: f32 = 0.15;
 
+// Rocket launcher constants (hardcoded for Part 15)
+const ROCKET_LAUNCHER_BASE: usize = 182;
+const ROCKET_LAUNCHER_BARREL: usize = 228;
+const ROCKET_SPRITE: usize = 251;
+const EXPLOSION_SPRITE: usize = 21;
+const ROCKET_MAX_AMMO: u8 = 3;
+const AMMO_REFILL_SECS: f32 = 2.0;
+const ATTACK_PAUSE_SECS: f32 = 0.3;
+const ROCKET_SPEED: f32 = 600.0;
+const ROCKET_DAMAGE: f32 = 50.0;
+const SPLASH_RADIUS: f32 = 60.0;
+const AMMO_SLOT_OFFSETS: [(f32, f32); 3] = [(0.0, 8.0), (-12.0, 8.0), (12.0, 8.0)];
 #[derive(Component)]
 pub struct Tower;
 
@@ -38,8 +50,33 @@ pub(crate) struct AttackTimer(pub Timer);
 pub(crate) struct DespawnTimer(pub Timer);
 
 #[derive(Component)]
-pub(crate) struct MuzzleFlash;
+pub(crate) struct RocketLauncher;
 
+#[derive(Component)]
+pub(crate) struct AmmoSlots {
+    pub slots: Vec<Option<Entity>>,
+}
+
+#[derive(Component)]
+pub(crate) struct AmmoRegenTimer(pub Timer);
+
+#[derive(Component)]
+pub(crate) struct AttackCooldown(pub Timer);
+
+#[derive(Component)]
+pub(crate) struct Projectile {
+    pub target: Entity,        // homing target — updated each frame
+    pub target_position: Vec2, // fallback if target dies
+    pub speed: f32,
+    pub damage: f32,
+    pub splash_radius: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct Exploding;
+
+#[derive(Component)]
+pub(crate) struct MuzzleFlash;
 #[derive(Resource)]
 pub struct TowerAtlas {
     texture: Handle<Image>,
@@ -98,14 +135,14 @@ pub fn spawn_placement_preview(
     commands.spawn((
         TowerPreview,
         GameEntity,
-        tinted(TOWER_BASE),
+        tinted(ROCKET_LAUNCHER_BASE),
         Transform::from_xyz(0.0, 0.0, 2.0),
         Visibility::Hidden,
     ));
     commands.spawn((
         TowerPreview,
         GameEntity,
-        tinted(TOWER_TOP),
+        tinted(ROCKET_LAUNCHER_BARREL),
         Transform::from_xyz(0.0, 0.0, 2.1),
         Visibility::Hidden,
     ));
@@ -153,6 +190,83 @@ pub fn update_placement_preview(
         }
     }
 }
+/// Spawns the original instant-damage tower (base + turret).
+/// Kept for easy re-enable when multi-tower selection arrives.
+fn spawn_instant_tower(
+    commands: &mut Commands,
+    atlas: &TowerAtlas,
+    pos: Vec2,
+) {
+    commands.spawn((
+        Tower,
+        GameEntity,
+        Sprite::from_atlas_image(
+            atlas.texture.clone(),
+            TextureAtlas { layout: atlas.layout.clone(), index: TOWER_BASE },
+        ),
+        Transform::from_xyz(pos.x, pos.y, 2.0),
+    ));
+
+    commands.spawn((
+        TowerTurret,
+        GameEntity,
+        Sprite::from_atlas_image(
+            atlas.texture.clone(),
+            TextureAtlas { layout: atlas.layout.clone(), index: TOWER_TOP },
+        ),
+        Transform::from_xyz(pos.x, pos.y, 2.1),
+        AttackRange(ATTACK_RANGE),
+        Damage(DAMAGE),
+        AttackTimer(Timer::from_seconds(ATTACK_COOLDOWN, TimerMode::Repeating)),
+    ));
+}
+
+/// Spawns the rocket launcher tower (base + rotating barrel + ammo slots).
+fn spawn_rocket_launcher(
+    commands: &mut Commands,
+    atlas: &TowerAtlas,
+    pos: Vec2,
+) {
+    commands.spawn((
+        Tower,
+        GameEntity,
+        Sprite::from_atlas_image(
+            atlas.texture.clone(),
+            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_LAUNCHER_BASE },
+        ),
+        Transform::from_xyz(pos.x, pos.y, 2.0),
+    ));
+
+    let turret_entity = commands.spawn((
+        RocketLauncher,
+        GameEntity,
+        Sprite::from_atlas_image(
+            atlas.texture.clone(),
+            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_LAUNCHER_BARREL },
+        ),
+        Transform::from_xyz(pos.x, pos.y, 2.1),
+        AttackRange(ATTACK_RANGE),
+        AttackCooldown(Timer::from_seconds(ATTACK_PAUSE_SECS, TimerMode::Repeating)),
+        AmmoRegenTimer(Timer::from_seconds(AMMO_REFILL_SECS, TimerMode::Repeating)),
+        AmmoSlots { slots: vec![None; ROCKET_MAX_AMMO as usize] },
+    )).id();
+
+    let mut slot_entities = vec![None; ROCKET_MAX_AMMO as usize];
+    commands.entity(turret_entity).with_children(|turret_children| {
+        for i in 0..ROCKET_MAX_AMMO {
+            let offset = AMMO_SLOT_OFFSETS[i as usize];
+            let slot_entity = turret_children.spawn((
+                Sprite::from_atlas_image(
+                    atlas.texture.clone(),
+                    TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_SPRITE },
+                ),
+                Transform::from_xyz(offset.0, offset.1, 2.2),
+            )).id();
+            slot_entities[i as usize] = Some(slot_entity);
+        }
+    });
+    commands.entity(turret_entity).insert(AmmoSlots { slots: slot_entities });
+}
 
 pub fn place_tower_on_click(
     mut commands: Commands,
@@ -196,30 +310,8 @@ pub fn place_tower_on_click(
     placed.0.insert(tile);
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
-    // Base (static, z=2.0)
-    commands.spawn((
-        Tower,
-        GameEntity,
-        Sprite::from_atlas_image(
-            atlas.texture.clone(),
-            TextureAtlas { layout: atlas.layout.clone(), index: TOWER_BASE },
-        ),
-        Transform::from_xyz(pos.x, pos.y, 2.0),
-    ));
-
-    // Turret (rotates during targeting, z=2.1)
-    commands.spawn((
-        TowerTurret,
-        GameEntity,
-        Sprite::from_atlas_image(
-            atlas.texture.clone(),
-            TextureAtlas { layout: atlas.layout.clone(), index: TOWER_TOP },
-        ),
-        Transform::from_xyz(pos.x, pos.y, 2.1),
-        AttackRange(ATTACK_RANGE),
-        Damage(DAMAGE),
-        AttackTimer(Timer::from_seconds(ATTACK_COOLDOWN, TimerMode::Repeating)),
-    ));
+    // For Part 15 only the rocket launcher is spawnable.
+    spawn_rocket_launcher(&mut commands, &atlas, pos);
 }
 
 pub fn attack_enemies(
@@ -309,6 +401,180 @@ pub fn despawn_timed(
         if timer.0.just_finished() {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+pub fn refill_ammo(
+    time: Res<Time>,
+    mut turrets: Query<(Entity, &mut AmmoRegenTimer, &mut AmmoSlots), With<RocketLauncher>>,
+    mut commands: Commands,
+    atlas: Res<TowerAtlas>,
+) {
+    for (turret_entity, mut regen, mut ammo) in turrets.iter_mut() {
+        regen.0.tick(time.delta());
+        if regen.0.just_finished() {
+            let empty_idx = ammo.slots.iter().position(|s| s.is_none());
+            if let Some(idx) = empty_idx {
+                let mut new_entity = None;
+                commands.entity(turret_entity).with_children(|turret_children| {
+                    let offset = AMMO_SLOT_OFFSETS[idx];
+                    new_entity = Some(turret_children.spawn((
+                        Sprite::from_atlas_image(
+                            atlas.texture.clone(),
+                            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_SPRITE },
+                        ),
+                        Transform::from_xyz(offset.0, offset.1, 2.2),
+                    )).id());
+                });
+                if let Some(entity) = new_entity {
+                    ammo.slots[idx] = Some(entity);
+                }
+            }
+        }
+    }
+}
+
+pub fn launch_rockets(
+    time: Res<Time>,
+    atlas: Res<TowerAtlas>,
+    mut turrets: Query<(Entity, &mut Transform, &mut AttackCooldown, &AttackRange, &mut AmmoSlots), (With<RocketLauncher>, Without<Enemy>)>,
+    enemies: Query<(Entity, &Transform), (With<Enemy>, With<PathFollower>, Without<TowerTurret>, Without<RocketLauncher>)>,
+    slot_transforms: Query<&GlobalTransform>,
+    mut commands: Commands,
+) {
+    let enemy_positions: Vec<(Entity, Vec2)> = enemies
+        .iter()
+        .map(|(e, t)| (e, t.translation.truncate()))
+        .collect();
+
+    for (_turret_entity, mut turret_transform, mut cooldown, range, mut ammo) in turrets.iter_mut() {
+        cooldown.0.tick(time.delta());
+        let turret_pos = turret_transform.translation.truncate();
+
+        let mut nearest: Option<(Entity, f32)> = None;
+        for &(entity, pos) in &enemy_positions {
+            let dist = turret_pos.distance(pos);
+            if dist <= range.0 {
+                if nearest.map_or(true, |(_, best)| dist < best) {
+                    nearest = Some((entity, dist));
+                }
+            }
+        }
+
+        if let Some((target, _)) = nearest {
+            let direction = enemy_positions.iter()
+                .find(|(e, _)| *e == target)
+                .map(|(_, p)| *p - turret_pos)
+                .unwrap_or(Vec2::X);
+            let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
+            turret_transform.rotation = Quat::from_rotation_z(angle);
+
+            if cooldown.0.just_finished() {
+                let slot_idx = ammo.slots.iter().position(|s| s.is_some());
+                if let Some(idx) = slot_idx {
+                    let ammo_entity = ammo.slots[idx].take().unwrap();
+                    // Spawn the projectile at the slot's world position so it
+                    // visually detaches from the launcher rather than teleporting.
+                    let spawn_pos = slot_transforms.get(ammo_entity)
+                        .map(|gt| gt.translation().truncate())
+                        .unwrap_or(turret_pos);
+                    commands.entity(ammo_entity).despawn();
+
+                    let target_pos = enemy_positions.iter()
+                        .find(|(e, _)| *e == target)
+                        .map(|(_, p)| *p)
+                        .unwrap_or(turret_pos + direction);
+
+                    commands.spawn((
+                        Projectile {
+                            target,
+                            target_position: target_pos,
+                            speed: ROCKET_SPEED,
+                            damage: ROCKET_DAMAGE,
+                            splash_radius: SPLASH_RADIUS,
+                        },
+                        GameEntity,
+                        Sprite::from_atlas_image(
+                            atlas.texture.clone(),
+                            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_SPRITE },
+                        ),
+                        Transform::from_xyz(spawn_pos.x, spawn_pos.y, 2.3),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+pub fn move_projectiles(
+    time: Res<Time>,
+    mut projectiles: Query<(Entity, &mut Transform, &mut Projectile), (Without<Exploding>, Without<Enemy>)>,
+    enemies: Query<&Transform, (With<Enemy>, Without<Exploding>, Without<Projectile>)>,
+    mut commands: Commands,
+) {
+    for (entity, mut transform, mut projectile) in projectiles.iter_mut() {
+        // Homing: update target position if the enemy is still alive.
+        if let Ok(target_transform) = enemies.get(projectile.target) {
+            projectile.target_position = target_transform.translation.truncate();
+        }
+
+        let current_pos = transform.translation.truncate();
+        let to_target = projectile.target_position - current_pos;
+        let distance = to_target.length();
+        let move_dist = projectile.speed * time.delta_secs();
+
+        // Face the target — the rocket sprite points up by default.
+        if distance > 0.0 {
+            let direction = to_target.normalize();
+            let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
+            transform.rotation = Quat::from_rotation_z(angle);
+        }
+
+        if distance <= move_dist {
+            transform.translation.x = projectile.target_position.x;
+            transform.translation.y = projectile.target_position.y;
+            commands.entity(entity).insert(Exploding);
+        } else {
+            let direction = to_target.normalize();
+            transform.translation += (direction * move_dist).extend(0.0);
+        }
+    }
+}
+
+pub fn explode_projectiles(
+    mut commands: Commands,
+    atlas: Res<TowerAtlas>,
+    mut gold: ResMut<Gold>,
+    projectiles: Query<(Entity, &Transform, &Projectile), (With<Exploding>, Without<Enemy>)>,
+    mut enemies: Query<(Entity, &Transform, &mut Health, &Bounty), (With<Enemy>, Without<Exploding>)>,
+) {
+    for (proj_entity, proj_transform, projectile) in projectiles.iter() {
+        let pos = proj_transform.translation.truncate();
+
+        for (enemy_entity, enemy_transform, mut health, bounty) in enemies.iter_mut() {
+            if pos.distance(enemy_transform.translation.truncate()) <= projectile.splash_radius {
+                if health.0 > 0.0 {
+                    health.0 -= projectile.damage;
+                    if health.0 <= 0.0 {
+                        gold.0 += bounty.0 as f32;
+                        commands.entity(enemy_entity).despawn();
+                    }
+                }
+            }
+        }
+
+        commands.spawn((
+            GameEntity,
+            DespawnTimer(Timer::from_seconds(0.15, TimerMode::Once)),
+            Sprite::from_atlas_image(
+                atlas.texture.clone(),
+                TextureAtlas { layout: atlas.layout.clone(), index: EXPLOSION_SPRITE },
+            ),
+            Transform::from_xyz(pos.x, pos.y, 2.4),
+            Visibility::default(),
+        ));
+
+        commands.entity(proj_entity).despawn();
     }
 }
 

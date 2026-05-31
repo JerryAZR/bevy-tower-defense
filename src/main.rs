@@ -13,7 +13,7 @@ use bevy_ecs_tilemap::prelude::*;
 
 use state::{GameState, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
-use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed};
+use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, handle_level_select_input};
 use game_over::{setup_game_over, handle_game_over_input};
@@ -47,6 +47,10 @@ fn main() {
             spawn_wave_enemies,
             move_enemies,
             attack_enemies,
+            refill_ammo,
+            launch_rockets,
+            move_projectiles,
+            explode_projectiles,
             process_base_reachers,
             check_game_state,
             earn_passive_income,

@@ -32,7 +32,7 @@ pub const PASSIVE_INCOME_RATE: f32 = 3.0;
 
 /// Cost to place one tower.  Hardcoded — will become data-driven when we
 /// add multiple tower types.
-pub const TOWER_COST: u32 = 100;
+pub const TOWER_COST: u32 = 150;
 
 /// How long the placement preview stays red after the player tries to place
 /// a tower they cannot afford.
