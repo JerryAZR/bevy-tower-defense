@@ -1,24 +1,59 @@
 # Part 6: External Level Data — Loading Maps from TOML Files
 
-In Part 5 we modularized the codebase. In this part we complete the separation of **level design** from **game code** by moving map definitions into external TOML files. Designers can now create and edit levels without touching Rust.
+> **Time to read:** ~25 minutes  
+> **New concepts:** `serde` deserialization, TOML data files, data-driven design  
+> **Prerequisite:** Part 5 (modular codebase with `map.rs`, `tiling.rs`, and `main.rs`)
 
 ---
 
-## Why external files?
+## Recap: What We Already Have
 
-Hardcoding maps in `build_demo_map()` has obvious limits:
-
-- Every new level requires a recompile.
-- Designers need Rust knowledge.
-- Version control diffs are noisy when level data is mixed with code.
-
-External files solve all three problems. TOML is a good choice because it is human-readable, supports comments, and integrates well with Rust via `serde`.
+Our code is organized into three modules: `map.rs` holds the logical grid, `tiling.rs` holds the auto-tiling engine, and `main.rs` wires everything together. The map itself is still built by `build_demo_map()` — a Rust function that hardcodes a 3-tile-high horizontal road. That works for one level, but every change requires a recompile.
 
 ---
 
-## Dependencies
+## Goal: What We Will Build
 
-We add two crates to `Cargo.toml`:
+We will move map definitions out of Rust and into external **TOML files**:
+
+1. Add `serde` and `toml` dependencies for deserialization.
+2. Design a TOML format that describes map dimensions, path waypoints, and (optionally) waves.
+3. Create a `level.rs` module that loads TOML into `LevelData`, then builds a `MapLayout` from it.
+4. Replace `build_demo_map()` with `load_level("assets/levels/level_01.toml")`.
+5. Add inner-corner auto-tiling rules so turns look correct on the new path shape.
+
+The result: designers can create and edit levels without touching Rust, and changes take effect immediately without recompiling.
+
+---
+
+## New Bevy APIs & Concepts
+
+### `serde` and `Deserialize`
+
+`serde` is Rust's standard serialization framework. The `Deserialize` derive macro generates code that populates a struct from an external format (JSON, TOML, YAML, etc.). In Bevy games, this is the standard way to load configuration, level data, and save files.
+
+```rust
+#[derive(Deserialize)]
+struct Config {
+    health: u32,
+}
+```
+
+`toml::from_str::<Config>("health = 100")` produces `Config { health: 100 }`.
+
+### Data-Driven Design
+
+**Data-driven design** means keeping game logic in code and game content in data files. The code decides *how* things work; the data decides *what* things exist. Our auto-tiling system is already data-driven (rules describe visuals), but the map geometry is still hardcoded. Moving the map into TOML completes the separation.
+
+**Pitfall:** It is tempting to make the data format expressive (conditions, loops, expressions). Resist. A level file should describe *what* is in the level, not *how* to build it. Keep the build logic in Rust where it can be tested, debugged, and version-controlled with the compiler.
+
+---
+
+## Walkthrough
+
+### Step 1: Add dependencies
+
+Add two crates to `Cargo.toml`:
 
 ```toml
 serde = { version = "1", features = ["derive"] }
@@ -30,9 +65,9 @@ toml = "0.8"
 
 ---
 
-## Level file format
+### Step 2: Design the TOML format
 
-Here is `assets/levels/level_01.toml`:
+Create `assets/levels/level_01.toml`:
 
 ```toml
 [map]
@@ -48,7 +83,7 @@ waypoints = [
 ]
 ```
 
-### Design decisions
+**Design decisions:**
 
 | Decision | Rationale |
 |---|---|
@@ -59,9 +94,9 @@ waypoints = [
 
 ---
 
-## Rust types
+### Step 3: Create Rust types
 
-We add a new module, `src/level.rs`:
+Create `src/level.rs`:
 
 ```rust
 use bevy::prelude::*;
@@ -104,9 +139,9 @@ pub struct WaveData {
 
 ---
 
-## Loading and building
+### Step 4: Load and build the map
 
-### `load_level`
+#### `load_level`
 
 ```rust
 pub fn load_level(path: &str) -> LevelData {
@@ -119,7 +154,7 @@ pub fn load_level(path: &str) -> LevelData {
 
 Simple and strict: if the file is missing or malformed, the game panics immediately. In a production game you might return a `Result` and show an error screen, but for a tutorial, fail-fast is clearer.
 
-### `build_map_from_level`
+#### `build_map_from_level`
 
 This is where the width-3 expansion happens:
 
@@ -129,9 +164,9 @@ pub fn build_map_from_level(level: &LevelData) -> MapLayout {
     let height = level.map.height;
     let mut tiles = vec![TileType::Grass; (width * height) as usize];
 
-    for (_id, path) in &level.paths {
+    for (id, path) in &level.paths {
         if path.waypoints.len() < 2 {
-            panic!("Path '{}' must have at least 2 waypoints", _id);
+            panic!("Path '{}' must have at least 2 waypoints", id);
         }
         for window in path.waypoints.windows(2) {
             let [x1, y1] = window[0];
@@ -167,7 +202,7 @@ pub fn build_map_from_level(level: &LevelData) -> MapLayout {
                 panic!(
                     "Path '{}' has a diagonal segment: ({},{}) -> ({},{}). \
                      Only axis-aligned segments are supported.",
-                    _id, x1, y1, x2, y2
+                    id, x1, y1, x2, y2
                 );
             }
         }
@@ -205,6 +240,7 @@ pub fn build_map_from_level(level: &LevelData) -> MapLayout {
 ```
 
 **Why the diagonal fill is needed:** When two perpendicular width-3 segments meet at a corner, they form an L-shape, not a complete 3×3 block. The diagonal tile on the "outside" of the turn is covered by neither segment. For example, a vertical segment at x=2 and a horizontal segment at y=5 both cover (2,5), but the tile at (1,4) — one step west and one step south of the corner — is left as grass. The second loop computes this missing tile for each interior waypoint and marks it as path.
+
 **Key behaviors:**
 
 - **Axis-aligned only.** Diagonal segments panic. This keeps the expansion logic simple and avoids ambiguous corner cases.
@@ -213,11 +249,11 @@ pub fn build_map_from_level(level: &LevelData) -> MapLayout {
 
 ---
 
-## Inner corner tiles
+### Step 5: Add inner corner rules
 
 With the diagonal fill in place, turns now produce complete 3×3 path blocks. This creates a new visual case: a tile surrounded by path on all four sides but with grass on one diagonal. These **inner corners** need their own sprites so the path does not look like a flat rectangle at every turn.
 
-We add four new rules to `build_rules()` in `src/tiling.rs`, checked before the outer corner rules:
+Add four new rules to `build_rules()` in `src/tiling.rs`, checked before the outer corner rules:
 
 ```rust
 // Inner corners
@@ -231,7 +267,7 @@ Each pattern requires `Same` on all four cardinals and `Same` on three diagonals
 
 ---
 
-## Wiring in `main.rs`
+### Step 6: Wire in `main.rs`
 
 ```rust
 mod level;
@@ -257,19 +293,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 ---
 
-## Simplifications and future work
-
-| Simplification | Future extension |
-|---|---|
-| **Panic on parse errors** | Return `Result` and show a user-friendly error dialog or log. |
-| **Hardcoded file path** | Accept a command-line argument or menu selection to choose the level. |
-| **No wave data** | `WaveData` will gain fields: spawn time, enemy type count, path reference. |
-| **Single path per level** | Multiple paths are already supported by the `HashMap`; enemies will reference them by ID. |
-| **Grass-only default terrain** | Add optional terrain layers (water, rocks) to the TOML and `TileType` enum. |
-
----
-
-## Running the project
+### Step 7: Verify
 
 ```bash
 cargo run
@@ -286,15 +310,26 @@ Try editing the waypoints in the TOML file and re-running. No recompile needed.
 
 ---
 
-## Recap
+## Simplifications and future work
 
-In this part we:
+| Simplification | Future extension |
+|---|---|
+| **Panic on parse errors** | Return `Result` and show a user-friendly error dialog or log. |
+| **Hardcoded file path** | Accept a command-line argument or menu selection to choose the level. |
+| **No wave data** | `WaveData` will gain fields: spawn time, enemy type count, path reference. |
+| **Single path per level** | Multiple paths are already supported by the `HashMap`; enemies will reference them by ID. |
+| **Grass-only default terrain** | Add optional terrain layers (water, rocks) to the TOML and `TileType` enum. |
 
-1. Added `serde` and `toml` dependencies for deserialization.
-2. Designed a **TOML level format** with `[map]`, `[paths.id]`, and optional `waves`.
-3. Created `src/level.rs` with `LevelData`, `load_level`, and `build_map_from_level`.
-4. **Replaced `build_demo_map()`** with file-driven level loading.
-5. Inserted `LevelData` as an ECS resource for future gameplay systems.
-6. Verified that editing the TOML file changes the map without recompiling.
+---
+
+## Summary
+
+- We added `serde` and `toml` dependencies for deserialization.
+- We designed a **TOML level format** with `[map]`, `[paths.id]`, and optional `waves`.
+- We created `src/level.rs` with `LevelData`, `load_level`, and `build_map_from_level`.
+- We **replaced `build_demo_map()`** with file-driven level loading.
+- We inserted `LevelData` as an ECS resource for future gameplay systems.
+- We added **inner corner rules** so turns render correctly on the new path shape.
+- We verified that editing the TOML file changes the map without recompiling.
 
 In **Part 7** we will add enemies that follow the path waypoints from spawn to base.
