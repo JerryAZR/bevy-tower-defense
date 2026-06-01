@@ -43,7 +43,7 @@ struct Config {
 
 ### Data-Driven Design
 
-**Data-driven design** means keeping game logic in code and game content in data files. The code decides *how* things work; the data decides *what* things exist. Our auto-tiling system is already data-driven (rules describe visuals), but the map geometry is still hardcoded. Moving the map into TOML completes the separation.
+**Data-driven design** means keeping game logic in code and game content in data files. The code decides *how* things work; the data decides *what* things exist. Our auto-tiling rules look data-like, but they are still hardcoded Rust. We *could* externalize them into a rules file too, but since our project only has one tileset and one set of rules, that would add complexity without benefit. The map geometry, on the other hand, changes per level, so moving it into TOML is a clear win.
 
 **Pitfall:** It is tempting to make the data format expressive (conditions, loops, expressions). Resist. A level file should describe *what* is in the level, not *how* to build it. Keep the build logic in Rust where it can be tested, debugged, and version-controlled with the compiler.
 
@@ -62,6 +62,8 @@ toml = "0.8"
 
 - **`serde`** provides the `Deserialize` derive macro.
 - **`toml`** parses TOML text into Rust structs.
+
+**Why TOML?** JSON is harder for humans to read and (in standard form) does not support comments. YAML supports comments but is notorious for "indentation hell" — a single stray space can change the meaning of an entire subtree. TOML is explicit, flat, and comment-friendly. Its weakness is serialization: there is no single canonical way to serialize a struct back to TOML. That does not matter here because our game only *consumes* level data; it never writes it.
 
 ---
 
