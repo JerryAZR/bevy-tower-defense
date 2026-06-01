@@ -98,6 +98,10 @@ waypoints = [
 
 ### Step 3: Create Rust types
 
+Before writing code, consider what the runtime actually needs. The TOML file stores waypoints as a width-1 centerline — easy for a designer to edit, but our renderer needs the full width-3 grid of `Path` tiles. And in Part 7, enemies will need those same waypoints to follow the path. So we need *both*: the raw waypoints for gameplay logic, and the expanded grid for rendering.
+
+This means our `LevelData` struct mirrors the TOML shape closely (so we can deserialize directly), while a separate `build_map_from_level` function derives `MapLayout` from it. We keep the original data around as an ECS resource so future systems do not have to reverse-engineer waypoints from the tile grid.
+
 Create `src/level.rs`:
 
 ```rust
