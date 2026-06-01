@@ -362,7 +362,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 For now, tile visuals are resolved once inside `setup()` and never changed again. That is fine because our tower defense maps are immutable: towers sit on top of tiles but do not replace them.
 
-In a game with dynamic terrain (digging, building, destruction), you would add a system that re-runs resolution whenever a `TileType` changes. See `src/main.rs` in the repository for a commented example of how that system would look.
+In a game with dynamic terrain (digging, building, destruction), you would add a system that re-runs resolution whenever a `TileType` changes. Such a system would iterate over tiles with changed `TileType` components, call `rules.resolve()` again, and write the new index into `TileTextureIndex`.
 
 ---
 
