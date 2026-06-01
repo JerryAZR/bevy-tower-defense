@@ -4,6 +4,8 @@
 > **New concepts:** Rust modules, visibility (`pub`), crate structure  
 > **Prerequisite:** Part 4 (auto-tiling with `MapLayout`, `TileRules`, and `TilemapBundle` in a single `main.rs`)
 
+> **Note for experienced programmers:** If you are already comfortable with splitting code into modules and managing visibility, this part teaches nothing new — it is a standard refactor. You may skim or skip ahead to Part 6.
+
 ---
 
 ## Recap: What We Already Have
