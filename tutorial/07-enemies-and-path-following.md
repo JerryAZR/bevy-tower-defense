@@ -1,23 +1,129 @@
 # Part 7: Enemies and Path Following
 
-In Part 6 we loaded levels from external TOML files. In this part we finally get things moving on the map: enemies spawn at the entrance, follow the path waypoints to the base, and face the direction they are traveling. We also refactor our startup logic so data loading and visual spawning live in separate systems.
+> **Time to read:** ~30 minutes  
+> **New concepts:** Systems, Queries, `Update` / `FixedUpdate`, system chaining, position-based movement  
+> **Prerequisite:** Part 6 (external TOML levels with `LevelData`, `MapLayout`, and auto-tiling)
 
 ---
 
-## What we will build
+## Recap: What We Already Have
 
-- A **single test enemy** (a soldier sprite) that spawns at the first waypoint.
-- **Path-following logic** that moves the enemy along the waypoints defined in `level_01.toml`.
-- **Facing direction** — the soldier sprite rotates to point where it is going.
-- **Cleanup** — when the enemy reaches the last waypoint, it is despawned.
-
-We intentionally keep spawning simple (one enemy at startup) because the focus of this part is the movement system. Timed wave spawning comes later.
+Our level loads from an external TOML file. `setup()` reads `level_01.toml`, builds a `MapLayout` with width-3 path expansion, spawns the tilemap with auto-tiling, and inserts `LevelData` as an ECS resource. Everything is static — the map renders correctly, but nothing moves.
 
 ---
 
-## Splitting the monolithic startup system
+## Goal: What We Will Build
 
-Our `setup` function in Part 6 did everything: load files, build data structures, spawn the camera, and create the entire tilemap. As the game grows, this becomes hard to reason about. More importantly, we want the level data available as ECS resources *before* any rendering system runs.
+We will add moving enemies that follow the path waypoints from spawn to base:
+
+1. **Split `setup()`** into two chained startup systems: one for data loading, one for tilemap spawning.
+2. **Spawn a test enemy** as a sprite at the first waypoint.
+3. **Implement path following** with position-based movement toward stored `Vec2` targets.
+4. **Rotate the sprite** to face its direction of travel.
+5. **Despawn enemies** that reach the final waypoint.
+
+We intentionally spawn only one enemy because the focus is the movement system. Wave scheduling comes in a later part.
+
+---
+
+## New Bevy APIs & Concepts
+
+### Systems
+
+A **system** in Bevy is just a function with special parameters. When you register it with `.add_systems(Update, my_system)`, Bevy calls that function every frame, passing in the current state of the world. The parameters tell Bevy what data the system needs:
+
+- `mut commands: Commands` — spawn or despawn entities, insert resources.
+- `mut query: Query<&mut Transform>` — find all entities with a `Transform` component.
+- `time: Res<Time>` — read the global time resource.
+
+Until now, we have only used `setup` as a one-shot startup function. In this part, `move_enemies` runs every `FixedUpdate` tick and actually queries the world for entities to modify. That is the heart of ECS programming: systems process sets of entities based on their components.
+
+### Queries
+
+A **query** is how a system asks the ECS "give me all entities that have these components." Bevy returns an iterator you can loop over.
+
+```rust
+Query<(Entity, &mut Transform), With<Enemy>>
+```
+
+This query matches every entity that has:
+- An `Entity` ID (always available)
+- A `Transform` component (mutable, so we can move the sprite)
+- The `Enemy` marker component (`With<Enemy>` is a query filter)
+
+**Pitfall — the reader-writer rule:** Bevy borrows component data just like Rust borrows references. A system can have any number of *immutable* readers of a component, or *one* mutable writer — but never multiple writers, nor a writer and a reader at the same time. This applies per-component-type within a single system.
+
+```rust
+// OK: many immutable references
+Query<&Transform, With<Enemy>>
+Query<&Transform, With<Tower>>
+
+// OK: one mutable reference
+Query<&mut Transform, With<Enemy>>
+
+// NOT OK: two mutable references
+Query<&mut Transform, With<Enemy>>
+Query<&mut Transform, With<Tower>>
+
+// NOT OK: one mutable + one immutable
+Query<&mut Transform, With<Enemy>>
+Query<&Transform, With<Tower>>   // Transform is borrowed mutably above
+```
+
+If you need to modify `Transform` on both enemies and towers in the same system, use a single query with an `Or` filter or split the logic into two systems.
+
+This is a hard topic. The exact rules have subtleties — Bevy can sometimes prove non-overlapping queries are safe, and the borrow checker interacts with query filters in ways that take practice to predict. It is fine if the details do not click yet. The only thing you need to carry forward is: **queries are how systems ask Bevy for world state**, and the borrow-like rules exist to prevent data races. We will revisit this with concrete examples in later parts.
+
+### `Update` and `FixedUpdate`
+
+Every system you register must belong to a **schedule** — a named collection of systems that Bevy runs at a specific point in the frame. The two schedules you will use most often are:
+
+- **`Update`** — runs once per rendered frame. Its delta time varies with the frame rate (16 ms at 60 FPS, 33 ms at 30 FPS).
+- **`FixedUpdate`** — runs at a fixed timestep (60 Hz by default), independent of the renderer. If the game drops to 30 FPS, `FixedUpdate` still runs twice per frame to catch up.
+
+If you register `move_enemies` in `Update`, a stutter (frame taking 100 ms) would make the enemy jump forward by `speed * 0.1` in a single frame. In `FixedUpdate`, the same stutter is handled as six 16 ms ticks, producing six small, smooth steps.
+
+```rust
+.add_systems(Update, animate_ui)        // tied to frame rate
+.add_systems(FixedUpdate, move_enemies) // deterministic timestep
+```
+
+This is the same distinction Unity makes with `Update()` (frame-rate dependent) and `FixedUpdate()` (physics timestep). The difference is that in Bevy you pick the schedule explicitly when you register the system; there is no implicit default.
+
+**When to use which:**
+- Use `FixedUpdate` for gameplay logic that must be deterministic: movement, collision, damage ticks.
+- Use `Update` for visual polish that should feel smooth at high frame rates: UI animations, camera follow, particle effects.
+
+### System Chaining
+
+Systems registered in the same schedule run in parallel by default. You can force ordering with `.chain()`:
+
+```rust
+.add_systems(Startup, (load_data, spawn_tilemap, spawn_enemy).chain())
+```
+
+Bevy guarantees `load_data` finishes before `spawn_tilemap` begins, and `spawn_tilemap` finishes before `spawn_enemy` begins. This is essential when later systems depend on resources inserted by earlier ones.
+
+You can also chain logical systems in `Update` or `FixedUpdate` when order matters for correctness. For example, you might chain `apply_damage` before `despawn_dead_enemies` so the death check sees the final health value.
+
+### Position-Based Movement
+
+There are two common ways to move an entity along a path:
+
+1. **Progress-based:** Store a float `progress` (0.0 to 1.0) along the current segment. Compute position from progress every frame.
+2. **Position-based:** Store the target position. Move toward it every frame using the current `Transform` as the single source of truth.
+
+We choose position-based because it is more flexible. If you later add knockback, slows, or dashes, the movement system recovers naturally on the next frame because `Transform` is the single source of truth. A progress-based system would need special handling for every external force.
+
+**Pitfall:** Do not store both progress and position and try to keep them in sync. Pick one source of truth. Storing both creates a maintenance burden — any code that moves the entity must update both values, or they drift apart.
+
+---
+
+## Walkthrough
+
+### Step 1: Split the startup system
+
+Our `setup()` in Part 6 did everything: load files, build data structures, spawn the camera, and create the entire tilemap. As the game grows, this becomes hard to reason about. More importantly, we want level data available as ECS resources *before* any rendering system runs.
 
 We split `setup` into two startup systems and chain them:
 
@@ -25,7 +131,7 @@ We split `setup` into two startup systems and chain them:
 .add_systems(Startup, (load_level_data, spawn_tilemap).chain())
 ```
 
-### `load_level_data`
+#### `load_level_data`
 
 ```rust
 fn load_level_data(mut commands: Commands) {
@@ -41,7 +147,7 @@ fn load_level_data(mut commands: Commands) {
 
 This system has no rendering dependencies. It purely reads files, constructs Rust data, and inserts `MapLayout`, `TileRules`, and `LevelData` into the ECS as resources.
 
-### `spawn_tilemap`
+#### `spawn_tilemap`
 
 ```rust
 fn spawn_tilemap(
@@ -61,23 +167,64 @@ fn spawn_tilemap(
 
 This system consumes the resources produced by the first system. Because they are chained with `.chain()`, Bevy guarantees `load_level_data` finishes before `spawn_tilemap` begins.
 
-### Why this matters
-
-Separating data from rendering is not just aesthetics. In future parts we will:
-
-- Reload a level without restarting the app.
-- Show a loading screen while `load_level_data` runs.
-- Skip rendering entirely if the level file is malformed.
-
-All of these are easier when loading and spawning are independent systems.
+**Why this matters:** In future parts we will reload a level without restarting the app, show a loading screen while `load_level_data` runs, or skip rendering if the level file is malformed. All of these are easier when loading and spawning are independent systems.
 
 ---
 
-## Spawning an enemy sprite
+### Step 2: Design the enemy module
 
-Our enemy is a moving entity, not a static tile. We render it the same way we rendered tiles in Part 2: as a sprite with a texture atlas. The soldier sprite lives at atlas index `245` in the Kenney tilesheet.
+Before writing code, let's decide what an enemy *is* in ECS terms.
 
-### `spawn_test_enemy`
+An enemy needs:
+- **A sprite** — it is a visible object on screen. Bevy provides `Sprite` and `Transform` for this.
+- **An identity** — towers and projectiles must be able to say "that thing is an enemy." A marker component `Enemy` serves this purpose.
+- **Navigation state** — it must know which path to follow, which waypoint it is heading toward, and the world position of that waypoint. We group this into a `PathFollower` component.
+
+> **Design decision: pre-compute `target`.** You could derive the target position every frame from `path_id` and `waypoint_index` via a HashMap lookup and `tile_to_world` conversion. But `move_enemies` runs every tick on every enemy, so we store the world-space `Vec2` directly in `PathFollower`. This trades a small amount of memory for a measurable performance win — no lookups, no conversions, just a vector subtraction every frame.
+- **Speed** — different enemies may move at different speeds. A `MoveSpeed` component holds this value.
+
+We also need systems that act on these components:
+- `move_enemies` — runs every `FixedUpdate` tick, reads `PathFollower.target` and `MoveSpeed`, and updates `Transform` accordingly.
+- `advance_waypoint` — a helper called when an enemy reaches its target; increments the waypoint index and computes the next target position.
+- `cleanup_finished_enemies` — runs after movement, despawns enemies that have reached the final waypoint.
+
+Create `src/enemy.rs`:
+
+```rust
+use bevy::prelude::*;
+use crate::level::LevelData;
+
+#[derive(Component)]
+pub struct Enemy;
+
+#[derive(Component)]
+pub struct PathFollower {
+    pub path_id: String,
+    pub waypoint_index: usize,
+    pub target: Vec2,
+}
+
+#[derive(Component)]
+pub struct MoveSpeed(pub f32);
+```
+
+- **`Enemy`** is a plain marker. Future systems (tower targeting, projectile collision) will query `With<Enemy>` without caring about path data.
+- **`PathFollower`** holds the navigation state. When the enemy reaches the base, we *remove* this component rather than despawning immediately. This lets a separate system handle cleanup and (later) deduct player lives.
+- **`MoveSpeed`** is a newtype wrapper around `f32`. This is an ECS idiom: it makes the value queryable by type and self-documenting.
+
+---
+
+### Step 3: Spawn a test enemy
+
+Now we need a startup system that creates the enemy entity. What does it need to do?
+
+1. **Load the sprite** — we reuse the same Kenney tilesheet from Part 2, so we need `AssetServer` and `TextureAtlasLayout`.
+2. **Find the spawn point** — read `level.paths["main_road"].waypoints[0]` from `LevelData`.
+3. **Convert to world space** — the waypoints are grid coordinates; the sprite needs a world-space `Vec3` for its `Transform`.
+4. **Compute the first target** — the enemy starts at waypoint 0 and immediately heads toward waypoint 1. We pre-compute the world position of waypoint 1 and store it in `PathFollower.target`.
+5. **Spawn the entity** — bundle `Sprite`, `Transform`, `Enemy`, `PathFollower`, and `MoveSpeed` together.
+
+Add this as a third chained startup system in `main.rs`:
 
 ```rust
 fn spawn_test_enemy(
@@ -127,14 +274,15 @@ fn spawn_test_enemy(
 }
 ```
 
-### Key details
+**Key details:**
 
 - **`z = 1.0`** places the enemy above the tilemap (which is at `z = 0`).
 - **`waypoint_index = 1`** means the enemy is already heading *toward* the second waypoint. The first waypoint is where it starts.
-- **`target: Vec2`** stores the world position of the target waypoint directly in the component. This avoids a HashMap lookup and tile-to-world conversion every frame.
 - **`MoveSpeed(192.0)`** is `3 tiles/second × 64 pixels/tile`. Speed is in world units so the movement code never needs to know about tile sizes.
 
-### `tile_to_world`
+---
+
+### Step 4: Add `tile_to_world`
 
 This helper converts grid coordinates to world positions using the same centering math from Part 2:
 
@@ -154,32 +302,17 @@ We make it `pub` because towers (Part 8) will need to convert tile coordinates t
 
 ---
 
-## The enemy module
+### Step 5: Implement path following
 
-We create `src/enemy.rs` to hold all enemy-related logic.
+Now for the core movement system. What must it do every tick?
 
-### Components
+1. **Query all enemies** — find every entity with `Enemy`, `PathFollower`, `Transform`, and `MoveSpeed`.
+2. **Compute direction** — subtract current position (from `Transform`) from `PathFollower.target` to get the vector to travel.
+3. **Handle arrival** — if the enemy is already at (or extremely close to) the target, advance to the next waypoint immediately.
+4. **Move and rotate** — otherwise, move `speed * dt` units toward the target and set `Transform.rotation` so the sprite faces its direction of travel.
+5. **Handle overshoot** — if the enemy would reach or pass the target this frame, snap to the target position, then advance the waypoint.
 
-```rust
-#[derive(Component)]
-pub struct Enemy;
-
-#[derive(Component)]
-pub struct PathFollower {
-    pub path_id: String,
-    pub waypoint_index: usize,
-    pub target: Vec2,
-}
-
-#[derive(Component)]
-pub struct MoveSpeed(pub f32);
-```
-
-- **`Enemy`** is a plain marker. Future systems (tower targeting, projectile collision) will query `With<Enemy>` without caring about path data.
-- **`PathFollower`** holds the navigation state. When the enemy reaches the base, we *remove* this component rather than despawning immediately. This lets a separate system handle cleanup and (later) deduct player lives.
-- **`MoveSpeed`** is a new type wrapper around `f32`. This is an ECS idiom: it makes the value queryable by type and self-documenting.
-
-### `move_enemies`
+Add `move_enemies` to `src/enemy.rs`:
 
 ```rust
 pub fn move_enemies(
@@ -223,7 +356,7 @@ pub fn move_enemies(
 }
 ```
 
-### Movement strategy
+**Movement strategy:**
 
 Notice what this system does **not** do: it does not store a `progress` field or compute how far along a segment the enemy has traveled. Instead, it treats the enemy's `Transform` as the single source of truth.
 
@@ -233,13 +366,13 @@ Every frame:
 3. If close enough (`<= 0.01`), snap and advance to the next waypoint.
 4. Otherwise, move `speed * dt` units toward the target and rotate to face it.
 
-This design is resilient to external forces. In Part 8, towers might apply knockback by modifying the `Transform` directly. A progress-based system would desync; a position-based system recovers naturally on the next frame.
+This design is resilient to external forces. If you later add knockback, slows, or dashes, they can modify the `Transform` directly and the movement system recovers naturally on the next frame. A progress-based system would desync.
 
-### Why not carry over overshoot?
+**Why not carry over overshoot?**
 
-When `distance <= step`, we snap to the waypoint and advance. We do not carry the remaining distance into the next segment. At 60 FPS with a speed of 192 units/sec, the maximum unspent distance per frame is ~3.2 units (5% of a tile). The visual difference is imperceptible, and the code is much simpler to follow.
+When `distance <= step`, we snap to the waypoint and advance. We do not carry the remaining distance into the next segment, nor do we try to land exactly on the waypoint — a tiny overshoot is fine. At 60 FPS with a speed of 192 units/sec, the maximum overshoot per frame is ~3.2 units (5% of a tile). The enemy moves slowly compared to the tick rate, so the visual difference is imperceptible, and the code is much simpler to follow.
 
-### Facing direction
+**Facing direction:**
 
 The soldier sprite in the Kenney pack faces right by default. We rotate it with:
 
@@ -254,7 +387,13 @@ transform.rotation = Quat::from_rotation_z(angle);
 - Moving left → `π` radians → 180°
 - Moving down → `-π/2` radians → 90° clockwise
 
-### `advance_waypoint`
+---
+
+### Step 6: Advance waypoints and clean up
+
+When an enemy reaches its target, we need to advance it to the next waypoint. If there are no more waypoints, the enemy has reached the base. Instead of despawning immediately, we remove the `PathFollower` component. This decouples "reached base" from "what happens next" — a future system can deduct lives before cleanup runs.
+
+#### `advance_waypoint`
 
 ```rust
 fn advance_waypoint(
@@ -278,7 +417,9 @@ fn advance_waypoint(
 
 When the last waypoint is reached, we remove `PathFollower`. The enemy stops moving and becomes eligible for cleanup.
 
-### `cleanup_finished_enemies`
+A separate cleanup system runs after movement in the same `FixedUpdate` schedule. It queries for entities that still have `Enemy` but no longer have `PathFollower` — the exact state produced when `advance_waypoint` removes the component at the final waypoint.
+
+#### `cleanup_finished_enemies`
 
 ```rust
 pub fn cleanup_finished_enemies(
@@ -291,11 +432,11 @@ pub fn cleanup_finished_enemies(
 }
 ```
 
-This system runs in `FixedUpdate` alongside `move_enemies`. It queries for entities that have the `Enemy` marker but no longer have `PathFollower` — meaning they reached the base. In future parts, this same query will be used to deduct player lives before despawning.
+This system queries for entities that have the `Enemy` marker but no longer have `PathFollower` — meaning they reached the base. In future parts, this same query will be used to deduct player lives before despawning.
 
 ---
 
-## Wiring it all together
+### Step 7: Wire everything together
 
 ```rust
 fn main() {
@@ -312,7 +453,7 @@ The three startup systems are chained so they execute in order: data → tilemap
 
 ---
 
-## Running the project
+### Step 8: Verify
 
 ```bash
 cargo run
@@ -330,28 +471,25 @@ At `192.0` units/sec, the full journey takes roughly 6 seconds.
 
 ---
 
-## Design decisions
+## Simplifications and future work
 
-| Decision | Rationale |
+| Simplification | Future extension |
 |---|---|
-| **Position-based movement** | Transform is the single source of truth. Knockback and other external forces work without special handling. |
-| **Store `target: Vec2` in component** | Avoids HashMap lookup + tile-to-world conversion every frame. Only updated at waypoint crossings. |
-| **Remove `PathFollower` instead of despawning** | Decouples "reached base" detection from "what happens next." Future parts will deduct lives here. |
-| **Newtype `MoveSpeed(f32)`** | Self-documenting and queryable by type in the ECS. |
-| **Cleanup in `FixedUpdate`** | Movement and cleanup share the same schedule — gameplay logic stays together. |
-| **One test enemy only** | Validates the system without adding wave-scheduling complexity. Waves are a separate design problem for a future part. |
+| **One test enemy only** | Wave scheduling with spawn timers and multiple enemy types. |
+| **No health / lives** | Enemies reach the base and despawn. Future parts will deduct player lives. |
+| **No collision** | Enemies walk through each other. In a dense swarm, this is acceptable for a 2D tower defense. |
+| **Fixed speed** | Different enemy types will have different `MoveSpeed` values. |
+| **No spawn animation** | Enemies appear instantly. A fade-in or drop-in animation could be added. |
 
 ---
 
-## Recap
+## Summary
 
-In this part we:
+- We **refactored startup** into `load_level_data` and `spawn_tilemap` — separated data loading from rendering.
+- We **spawned an enemy sprite** using `Sprite::from_atlas_image`, reusing the atlas technique from Part 2.
+- We created `src/enemy.rs` with `Enemy`, `PathFollower`, and `MoveSpeed` components.
+- We implemented **position-based path following** — the enemy moves toward a stored `Vec2` target, advances waypoints on arrival, and rotates to face its direction.
+- We added **cleanup** via the `Without<PathFollower>` query pattern, running in `FixedUpdate` alongside movement.
+- We made `tile_to_world` public for reuse by towers in Part 8.
 
-1. **Refactored startup** into `load_level_data` and `spawn_tilemap` — separated data loading from rendering.
-2. **Spawned an enemy sprite** using `Sprite::from_atlas_image`, reusing the atlas technique from Part 2.
-3. Created `src/enemy.rs` with `Enemy`, `PathFollower`, and `MoveSpeed` components.
-4. Implemented **position-based path following** — the enemy moves toward a stored `Vec2` target, advances waypoints on arrival, and rotates to face its direction.
-5. Added **cleanup** via the `Without<PathFollower>` query pattern, running in `FixedUpdate` alongside movement.
-6. Made `tile_to_world` public for reuse by towers in Part 8.
-
-In **Part 8** we will add towers that players can place on grass tiles, with range detection and projectiles that home in on enemies.
+In **Part 8** we will add towers that players can place on grass tiles by clicking. Targeting and damage come in Part 9; projectiles come in a later part.
