@@ -81,6 +81,8 @@ The tilesheet is a single `1472×832` PNG that contains a `23×13` grid of `64×
 
 Our `setup` system now needs two new parameters to handle assets. Bevy will inject them automatically because their types are registered as resources:
 
+> **Note:** We are replacing the single red square from Part 1 with a full grid of tiles. Remove the `Sprite::from_color` spawn from `setup` — the grid loop below will handle all rendering.
+
 ```rust
 fn setup(
     mut commands: Commands,
@@ -125,7 +127,7 @@ First, define the grid size and tile size. We then compute offsets so the grid i
     let offset_y = -(rows as f32 * tile_size) / 2.0 + tile_size / 2.0;
 ```
 
-The offsets shift the grid so its center sits at `(0, 0)`. Without them, the grid would start at the origin and extend only into positive coordinates, leaving most of it off the bottom-left of the screen.
+The offsets shift the grid so its center sits at `(0, 0)`. Without them, the grid would start at the origin and extend only into positive coordinates, leaving most of it off the top-right of the screen.
 
 #### Position and tile selection
 
