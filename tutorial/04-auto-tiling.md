@@ -394,4 +394,4 @@ In a game with dynamic terrain (digging, building, destruction), you would add a
 - We stored `MapLayout` and `TileRules` as ECS `Resource`s for future systems.
 - We preserved `MapTile` and `PathTile` so existing gameplay queries continue to work.
 
-In **Part 5** we will extract `MapLayout` from code into an external data file, completing the separation of level design from game logic.
+In **Part 5** we will refactor the growing `main.rs` into focused modules (`map.rs` and `tiling.rs`), so each file has a single responsibility before we add more features.
