@@ -11,6 +11,14 @@ This is a tutorial project. Code and prose must teach, not just work.
 - Comment the **what** and **why** of non-obvious code. Unlike production code (where "what" comments are discouraged), tutorial code should explain itself to a learner.
 - Obvious lines (e.g., `commands.spawn(Camera2d)`) don't need comments.
 
+### Reasoning Before Code
+
+Every code block must be preceded by prose that explains what it does, why it is structured that way, and what the reader should notice. The reader should understand the intent, the components/resources involved, and the expected outcome *before* seeing any code.
+
+> ❌ **Do not** open a step with "Add this function:" or dump a full implementation without first describing what it needs to accomplish.
+
+> ✅ **Do** walk through the design decisions and system/component inventory, then present the code as the conclusion of that reasoning.
+
 ### Tutorial Structure
 
 :books: See `tutorial/TEMPLATE.md` for the canonical tutorial structure, section descriptions, and writing rules.

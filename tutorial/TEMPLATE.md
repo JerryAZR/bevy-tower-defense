@@ -67,7 +67,7 @@ For non-trivial features, begin the walkthrough by describing the **player-visib
 
 ### Writing rules for this section
 
-- **Lead with intent.** Start each step with the goal, not the code.
+- **Reason before code.** Every code block must be preceded by prose that explains what it does, why it exists, and what the reader should notice. The reader should understand the intent before reading a single line. Start each step with the goal, not the code.
   - ✅ "To make the camera follow the player's cursor, we need to read the cursor position every frame. Bevy provides `Res<CursorPosition>` for this."
   - ❌ "Add this system:"
 
