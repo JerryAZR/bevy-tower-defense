@@ -232,12 +232,12 @@ fn build_rules() -> TileRules {
         TileType::Path,
         TileTypeRuleset {
             rules: vec![
-                // Corners: one cardinal neighbor is Same, the other is Different
+                // Corners: grass on two sides, path on the other two.
                 rule(pat(diff, same, same, diff, any, diff, any, any), 79),   // upper-left
                 rule(pat(diff, same, diff, same, diff, any, any, any), 81),   // upper-right
                 rule(pat(same, diff, same, diff, any, any, any, diff), 125),  // bottom-left
                 rule(pat(same, diff, diff, same, any, any, diff, any), 127),  // bottom-right
-                // Edges: one cardinal neighbor is Different, the rest are Same or Any
+                // Edges: grass on one side, path on the other three.
                 rule(pat(diff, same, same, same, any, any, any, any), 80),    // top
                 rule(pat(same, diff, same, same, any, any, any, any), 126),   // bottom
                 rule(pat(same, same, same, diff, any, any, any, any), 102),   // left
@@ -269,14 +269,27 @@ In a 3-tile-high road, the top edge tile has path tiles to its south, east, and 
 
 For a straight horizontal road, diagonal neighbors do not affect the visual. We include them in the pattern type for future expansion.
 
+**Our rule book is small on purpose.** A complete 8-neighbor "blob tileset" contains 47 unique transition tiles, covering every possible neighbor combination. Our Kenney pack provides only a handful of road variants — corners, edges, and a body tile — so our rules match exactly what the art allows. If you swap in a larger tileset with more transitions (T-junctions, inner corners, end caps), you can add more rules inside `build_rules()`. Remember that order still matters: a new specific rule may need to sit above an existing general one to match first.
+
 ---
 
 ### Step 4: Resolve visuals and spawn tiles
 
-Replace the body of `setup()` with the new approach. This system uses two parameters:
+Replace the body of `setup()` with the new approach. The flow is the same as Part 3 — create a tilemap parent, loop over the grid, spawn each tile, and finalize with a `TilemapBundle` — but the spawn loop now uses our auto-tiling rule book instead of a hardcoded `match`.
+
+This system uses two parameters:
 
 - `mut commands: Commands` — to spawn the camera, tilemap parent, and tile entities.
 - `asset_server: Res<AssetServer>` — to load the tilesheet texture.
+
+The spawn loop works in four steps:
+
+1. **Read the map.** For each grid coordinate `(x, y)`, look up the logical `tile_type` from `MapLayout`.
+2. **Resolve the visual.** Ask `TileRules` which atlas index matches this tile's neighbor pattern. This replaces the Part 3 `match` on coordinates.
+3. **Spawn the tile.** Create a `TileBundle` with the resolved `TileTextureIndex`, exactly as we did in Part 3. Attach `tile_type` as a component so gameplay systems can query it, plus `MapTile` on every tile and `PathTile` only on road tiles.
+4. **Register in storage.** Call `tile_storage.set(&pos, tile_entity)` so the tilemap parent knows about the new tile.
+
+After the loop, insert the completed `TilemapBundle` on the parent entity. Finally, insert both `map` and `rules` as ECS resources so later systems can read them.
 
 ```rust
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -340,13 +353,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(rules);
 }
 ```
-
-The key change is the spawn loop. Instead of a `match` on coordinates, we:
-1. Read the logical `tile_type` from `MapLayout`.
-2. Call `rules.resolve(tile_type, pos, &map)` to determine the visual atlas index.
-3. Spawn the tile with that index.
-
-`tile_type` is attached as a component so gameplay systems can query it directly. `MapTile` and `PathTile` are preserved for compatibility with existing queries.
 
 > **Run the game now.** The visual output should be identical to Part 3: a centered `15×10` grid with a horizontal dirt road across the middle. Try editing `build_demo_map()` — change `path_y` or add more path rows — and the visuals will update automatically because the rules inspect neighbors rather than coordinates.
 
