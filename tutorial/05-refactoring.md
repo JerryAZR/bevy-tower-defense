@@ -195,7 +195,7 @@ The spawn loop inside `setup()` is unchanged from Part 4. It still reads `tile_t
 To keep the tutorial focused, we skipped these advanced patterns:
 
 - **Plugins.** Bevy's `Plugin` trait lets you bundle systems and resources. For a two-module refactor, `add_systems(Startup, setup)` in `main()` is clearer than a `MapPlugin` and `TilingPlugin`.
-- **Resource wrappers.** We could have wrapped `MapLayout` and `TileRules` in a `Level` resource. We will do that in Part 6 when level data arrives.
+- **Resource wrappers.** We could have wrapped `MapLayout` and `TileRules` in a single `Level` resource. Part 6 adds a separate `LevelData` resource for path waypoints and wave definitions, but keeps `MapLayout` and `TileRules` independent so auto-tiling systems do not need to know about level format details.
 - **Events.** Dynamic tile updates (digging, building) would use Bevy events. Our maps are static, so events are unnecessary.
 
 ---
