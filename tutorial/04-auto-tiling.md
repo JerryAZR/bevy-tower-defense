@@ -1,41 +1,48 @@
 # Part 4: Auto-Tiling — From Hardcoded Indices to Data-Driven Visuals
 
-In Part 3 we rendered a tilemap efficiently, but the visual tile for each cell was still hardcoded. A `match` expression examined grid coordinates and manually assigned atlas indices. In this part we replace that with an **auto-tiling system**: the map stores only *logical* tile types (`Grass`, `Path`), and a set of *rules* decides which sprite to draw based on each tile's neighbors.
-
-This separation is powerful. It means you can change the map layout without touching visual code, and you can change the art style without touching map logic.
-
----
-
-## Why auto-tiling matters
-
-Consider two ways to build a road:
-
-**Hardcoded indices (what we had):**
-```rust
-let tile_index = match (row, col) {
-    (5, 0) => 102,   // left edge
-    (5, 14) => 104,  // right edge
-    (5, _) => 103,   // body
-    ...
-};
-```
-
-If you widen the road, add a curve, or swap the tileset, you rewrite the `match`. Every visual decision is baked into coordinate logic.
-
-**Auto-tiling (what we build):**
-```rust
-let tile_index = rules.resolve(TileType::Path, pos, &map);
-```
-
-The map says "this cell is a path." The rule book says "a path with grass to the north and path to the south is a top edge tile." The renderer never sees the logic — it just receives the final index.
-
-This mirrors how professional tools work: Tiled, LDTK, and custom editors all store logical layers and resolve visuals through rule sets.
+> **Time to read:** ~25 minutes  
+> **New concepts:** Auto-tiling  
+> **Prerequisite:** Part 3 (a `bevy_ecs_tilemap` grid rendered with hardcoded atlas indices)
 
 ---
 
-## The design at a glance
+## Recap: What We Already Have
 
-We introduce three layers:
+We have a `15×10` tilemap rendered efficiently through `bevy_ecs_tilemap`. The map is built inside `setup()` by a `match` expression that examines grid coordinates and manually assigns atlas indices. Every tile carries a `MapTile` marker; road tiles additionally carry `PathTile`.
+
+---
+
+## Goal: What We Will Build
+
+We will replace the hardcoded `match` with an **auto-tiling system**:
+
+1. Introduce logical tile types (`Grass`, `Path`) stored in a `MapLayout` resource.
+2. Build a rule book (`TileRules`) that maps neighbor patterns to atlas indices.
+3. Resolve visuals at spawn time by inspecting each tile's neighbors instead of its coordinates.
+
+This separation means you can change the road's position or width by editing the map data, and the visuals will adapt automatically. It also means you can swap the tileset without touching map logic.
+
+---
+
+## New Bevy APIs & Concepts
+
+### Auto-Tiling
+
+**Auto-tiling** is the practice of deriving a tile's visual appearance from its logical type and its neighbors, rather than assigning visuals directly during level design. You store only *what* each tile is (`Grass`, `Path`, `Water`), and a rule book decides *which sprite* to draw based on context: a path tile surrounded by grass on three sides becomes a corner; the same path tile surrounded by path on all sides becomes a body tile.
+
+This separation is common in professional tools (Tiled, LDTK) and production games because it lets designers paint logical maps without micromanaging every atlas index.
+
+**Pitfall:** Auto-tiling only works when the rule book is complete. If you add a new map shape (a T-junction, a diagonal road) but forget to add the corresponding rule, the tile will fall back to a generic body sprite and look wrong.
+
+---
+
+## Walkthrough
+
+### Designing the feature
+
+Before we write code, let's design the interface our auto-tiling system will expose. Since auto-tiling is a developer-facing feature, "what the player sees" is unchanged — the same centered `15×10` grid with a dirt road. What we are designing is the **contract** between the map data and the renderer.
+
+Our system has three layers:
 
 | Layer | Type | Purpose |
 |---|---|---|
@@ -49,13 +56,26 @@ The flow is:
 MapLayout (Grass/Path) → TileRules.resolve(pos) → TileTextureIndex → GPU
 ```
 
+**Design choices we are making:**
+
+1. **8-directional neighbors.** We check all 8 surrounding cells (cardinals + diagonals). This is more expressive than 4-directional checking and matches the Unity tilemap rule-tile format, though we will only use a subset for our straight road.
+
+2. **Relative matching (`Same` / `Different` / `Any`).** Rules ask "is the neighbor the same type as me?" rather than "is the neighbor specifically `Grass`?" This keeps rules reusable across tile types. We deliberately omit an `Is(TileType)` variant to keep the system simple.
+
+3. **No rotation or flipping.** Rules map one pattern to one atlas index. In a full editor you might rotate a rule to reuse a corner sprite in all four orientations; here we write four explicit corner rules.
+
+4. **Ordered evaluation, first match wins.** This is the standard approach in Unity rule tiles and Tiled automapping: list the most specific patterns first (corners), then general ones (edges), then a fallback (body).
+
 ---
 
-## Core types
+### Step 1: Define logical tile types
 
-### `TileType` — The logical vocabulary
+Open `src/main.rs` and add `TileType`, our logical vocabulary:
 
 ```rust
+use std::collections::HashMap;
+
+/// Logical tile types. Gameplay systems query these, not visual atlas indices.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum TileType {
     Grass,
@@ -63,9 +83,15 @@ enum TileType {
 }
 ```
 
-`TileType` is deliberately small. It describes *what* a tile is, not *how it looks*. Every tile entity carries this as a component so gameplay systems can query it: towers can only be placed on `Grass`, enemies walk only on `Path`.
+`TileType` is deliberately small. It describes *what* a tile is, not *how it looks*. Every tile entity will carry this as a component so gameplay systems can query it: towers can only be placed on `Grass`, enemies walk only on `Path`.
 
-### `MapLayout` — The authoritative grid
+We also keep `MapTile` and `PathTile` from Part 3. `MapTile` tags every tile; `PathTile` tags only road tiles.
+
+---
+
+### Step 2: Build the map layout
+
+`MapLayout` is a `Resource` (a global singleton in the ECS world, like `AssetServer` from Part 2) that stores the entire level design in a single flat array. Tile entities are just a *view* of this data.
 
 ```rust
 #[derive(Resource)]
@@ -74,25 +100,62 @@ struct MapLayout {
     height: u32,
     tiles: Vec<TileType>,
 }
+
+impl MapLayout {
+    fn get(&self, x: u32, y: u32) -> Option<TileType> {
+        if x < self.width && y < self.height {
+            Some(self.tiles[(y * self.width + x) as usize])
+        } else {
+            None
+        }
+    }
+}
 ```
 
-`MapLayout` is a `Resource`, not a component on each tile. This is important: it is a single flat array that represents the entire level design. In Part 5 it will become the deserialization target when we load maps from files. Tile entities are just a *view* of this data.
+`get` converts 2D coordinates into a 1D index. It returns `None` for out-of-bounds positions, which our auto-tiler will treat as "not the same type" — this naturally handles map edges.
 
-### `NeighborMatch` — Relative requirements
+Now add a helper that builds the demo map:
 
 ```rust
+fn build_demo_map() -> MapLayout {
+    let width: u32 = 15;
+    let height: u32 = 10;
+    let path_y = height / 2;
+
+    let mut tiles = vec![TileType::Grass; (width * height) as usize];
+
+    let has_top = path_y > 0;
+    let has_bot = path_y < height - 1;
+    let w = width as usize;
+
+    for x in 0..width {
+        let idx = (path_y * width + x) as usize;
+        tiles[idx] = TileType::Path;
+        if has_top { tiles[idx - w] = TileType::Path; }
+        if has_bot { tiles[idx + w] = TileType::Path; }
+    }
+
+    MapLayout { width, height, tiles }
+}
+```
+
+This produces a 3-tile-high horizontal strip of `Path` centered in a field of `Grass`. Notice that no atlas indices appear anywhere — the map is purely logical.
+
+---
+
+### Step 3: Build the auto-tiling rule book
+
+This is the heart of the system. We need four types:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum NeighborMatch {
     Same,       // neighbor must match center tile's type
     Different,  // neighbor must differ (or be out of bounds)
     Any,        // no requirement
 }
-```
 
-Notice that `Same` and `Different` are **relative** to the center tile, not absolute types. A `Same` check for a `Path` tile succeeds if the neighbor is also `Path`. The same rule, applied to a `Grass` tile, succeeds if the neighbor is `Grass`. This makes rules **reusable across tile types**.
-
-### `NeighborPattern` — 8-neighbor context
-
-```rust
+#[derive(Default, Clone)]
 struct NeighborPattern {
     north: NeighborMatch,
     south: NeighborMatch,
@@ -103,77 +166,100 @@ struct NeighborPattern {
     south_east: NeighborMatch,
     south_west: NeighborMatch,
 }
-```
 
-We define patterns for all 8 neighbors even though our current road only needs cardinals and a few diagonals. The structure is future-proof: adding T-junctions, curves, or blob-style transitions later only requires new rules, not new types.
-
-### `TileRule` and `TileTypeRuleset`
-
-```rust
+#[derive(Clone)]
 struct TileRule {
     pattern: NeighborPattern,
     atlas_index: u32,
 }
 
+#[derive(Clone)]
 struct TileTypeRuleset {
     rules: Vec<TileRule>,
     fallback: u32,
 }
 ```
 
-Rules are checked **in order**; the first match wins. This is why corners are listed before edges, and edges before the body. The `fallback` index guarantees that even an incomplete rule set produces a valid tile instead of crashing.
+`NeighborMatch::Same` and `Different` are **relative** to the center tile. A `Same` check for a `Path` tile succeeds if the neighbor is also `Path`. The same rule applied to a `Grass` tile succeeds if the neighbor is `Grass`. This makes rules reusable across tile types.
 
-### `TileRules` — The rule book
+We define patterns for all 8 neighbors even though our current road only needs cardinals and a few diagonals. The structure is future-proof: adding T-junctions or curves later only requires new rules, not new types.
+
+Add two small helpers that make the rule book readable:
+
+```rust
+fn pat(
+    n: NeighborMatch, s: NeighborMatch, e: NeighborMatch, w: NeighborMatch,
+    ne: NeighborMatch, nw: NeighborMatch, se: NeighborMatch, sw: NeighborMatch,
+) -> NeighborPattern {
+    NeighborPattern { north: n, south: s, east: e, west: w,
+        north_east: ne, north_west: nw, south_east: se, south_west: sw }
+}
+
+fn rule(pattern: NeighborPattern, atlas_index: u32) -> TileRule {
+    TileRule { pattern, atlas_index }
+}
+```
+
+Now build the rule book:
 
 ```rust
 #[derive(Resource, Default)]
 struct TileRules {
     rulesets: HashMap<TileType, TileTypeRuleset>,
 }
+
+impl TileRules {
+    fn add(&mut self, tile_type: TileType, ruleset: TileTypeRuleset) {
+        self.rulesets.insert(tile_type, ruleset);
+    }
+
+    fn resolve(&self, tile_type: TileType, pos: TilePos, map: &MapLayout) -> u32 {
+        self.rulesets
+            .get(&tile_type)
+            .map(|rs| rs.resolve(tile_type, pos, map))
+            .unwrap_or_else(|| panic!("No ruleset for {:?}", tile_type))
+    }
+}
+
+fn build_rules() -> TileRules {
+    let mut rules = TileRules::default();
+
+    let same = NeighborMatch::Same;
+    let diff = NeighborMatch::Different;
+    let any  = NeighborMatch::Any;
+
+    rules.add(
+        TileType::Path,
+        TileTypeRuleset {
+            rules: vec![
+                // Corners: one cardinal neighbor is Same, the other is Different
+                rule(pat(diff, same, same, diff, any, diff, any, any), 79),   // upper-left
+                rule(pat(diff, same, diff, same, diff, any, any, any), 81),   // upper-right
+                rule(pat(same, diff, same, diff, any, any, any, diff), 125),  // bottom-left
+                rule(pat(same, diff, diff, same, any, any, diff, any), 127),  // bottom-right
+                // Edges: one cardinal neighbor is Different, the rest are Same or Any
+                rule(pat(diff, same, same, same, any, any, any, any), 80),    // top
+                rule(pat(same, diff, same, same, any, any, any, any), 126),   // bottom
+                rule(pat(same, same, same, diff, any, any, any, any), 102),   // left
+                rule(pat(same, same, diff, same, any, any, any, any), 104),   // right
+            ],
+            fallback: 103,  // body
+        },
+    );
+
+    rules.add(
+        TileType::Grass,
+        TileTypeRuleset {
+            rules: vec![],
+            fallback: 129,
+        },
+    );
+
+    rules
+}
 ```
 
-The top-level collection maps each `TileType` to its `TileTypeRuleset`. Resolving a tile is a single lookup and a linear scan through (typically) fewer than a dozen rules.
-
----
-
-## The rule book for our road
-
-Our 3-tile-high horizontal road needs these visual variants:
-
-```
-┌─────────────────────────────┐
-│  ↑    ↑    ↑    ↑    ↑    ↑ │  top edge    (index 80)
-│ ←            ...           →│  body/edges  (102, 103, 104)
-│  ↓    ↓    ↓    ↓    ↓    ↓ │  bottom edge (126)
-└─────────────────────────────┘
-     ↖ corners ↗  (79, 81)
-     ↙ corners ↘  (125, 127)
-```
-
-The rules for `TileType::Path` encode these positions as neighbor patterns:
-
-```rust
-let same = NeighborMatch::Same;
-let diff = NeighborMatch::Different;
-let any = NeighborMatch::Any;
-
-rules.add(TileType::Path, TileTypeRuleset {
-    rules: vec![
-        // Corners: one cardinal neighbor is Same, the other is Different
-        rule(pat(diff, same, same, diff, any, diff, any, any), 79),   // upper-left
-        rule(pat(diff, same, diff, same, diff, any, any, any), 81),   // upper-right
-        rule(pat(same, diff, same, diff, any, any, any, diff), 125),  // bottom-left
-        rule(pat(same, diff, diff, same, any, any, diff, any), 127),  // bottom-right
-        
-        // Edges: one cardinal neighbor is Different, the rest are Same or Any
-        rule(pat(diff, same, same, same, any, any, any, any), 80),    // top
-        rule(pat(same, diff, same, same, any, any, any, any), 126),   // bottom
-        rule(pat(same, same, same, diff, any, any, any, any), 102),   // left
-        rule(pat(same, same, diff, same, any, any, any, any), 104),   // right
-    ],
-    fallback: 103,  // body
-});
-```
+Rules are checked in order; the first match wins. Corners are listed before edges, and edges before the body fallback. The `fallback` guarantees that even an incomplete rule set produces a valid tile.
 
 **Why do edges require `same` for the parallel cardinals?**
 
@@ -181,148 +267,125 @@ In a 3-tile-high road, the top edge tile has path tiles to its south, east, and 
 
 **Why are diagonals mostly `Any`?**
 
-For a straight horizontal road, diagonal neighbors do not affect the visual. We include them in the pattern type for future expansion — T-junctions and curves will need diagonal checks.
+For a straight horizontal road, diagonal neighbors do not affect the visual. We include them in the pattern type for future expansion.
 
 ---
 
-## How resolution works
+### Step 4: Resolve visuals and spawn tiles
+
+Replace the body of `setup()` with the new approach. This system uses two parameters:
+
+- `mut commands: Commands` — to spawn the camera, tilemap parent, and tile entities.
+- `asset_server: Res<AssetServer>` — to load the tilesheet texture.
 
 ```rust
-fn resolve(&self, tile_type: TileType, pos: TilePos, map: &MapLayout) -> u32 {
-    self.rulesets
-        .get(&tile_type)
-        .map(|rs| rs.resolve(tile_type, pos, map))
-        .unwrap_or_else(|| panic!("No ruleset for {:?}", tile_type))
-}
-```
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let map = build_demo_map();
+    let rules = build_rules();
 
-For a `Path` tile at position `(1, 6)` in a 3-tile road:
+    commands.spawn(Camera2d);
 
-1. Fetch the `Path` ruleset.
-2. Check corner rules first. Does north=`diff` and west=`diff`? No — west is path.
-3. Check edge rules. Does north=`diff` and south=`same`? Yes. Return `80` (top edge).
+    let texture_handle = asset_server.load("Tilesheet/towerDefense_tilesheet.png");
 
-Boundary tiles (x=0, x=14) are handled naturally: `map.get()` returns `None` for out-of-bounds, which `NeighborMatch::Different` treats as "not the same type." So a path tile at the map edge correctly matches a left/right edge rule.
+    let map_size = TilemapSize { x: map.width, y: map.height };
+    let tile_size = TilemapTileSize { x: 64.0, y: 64.0 };
+    let grid_size = tile_size.into();
+    let map_type = TilemapType::Square;
 
----
+    let tilemap_entity = commands.spawn_empty().id();
+    let mut tile_storage = TileStorage::empty(map_size);
 
-## Simplifications we made
+    for x in 0..map.width {
+        for y in 0..map.height {
+            let pos = TilePos { x, y };
+            let tile_type = map.get(x, y).unwrap();
 
-This system is intentionally simpler than a production auto-tiler. Here is what we left out, why it is fine for now, and how you would extend it:
+            // Resolve the visual atlas index from the rule book.
+            let visual_index = rules.resolve(tile_type, pos, &map);
 
-### 1. Static resolution at spawn time
+            let tile_entity = commands
+                .spawn((
+                    TileBundle {
+                        position: pos,
+                        tilemap_id: TilemapId(tilemap_entity),
+                        texture_index: TileTextureIndex(visual_index),
+                        ..Default::default()
+                    },
+                    tile_type,
+                    MapTile,
+                ))
+                .id();
 
-```rust
-// In setup(), once:
-let visual_index = rules.resolve(tile_type, pos, &map);
-```
+            if tile_type == TileType::Path {
+                commands.entity(tile_entity).insert(PathTile);
+            }
 
-**Assumption:** The map does not change after the game starts. No tiles are added, removed, or retyped at runtime.
-
-**Why this is fine:** For a tower defense game with fixed maps, the level geometry is immutable. Towers sit on top of tiles; they do not replace them.
-
-**How to extend:** If you need dynamic terrain (digging, building, destruction), add a system that listens for `TileType` changes and re-runs resolution:
-
-```rust
-fn update_tile_visuals(
-    mut tiles: Query<(&TileType, &TilePos, &mut TileTextureIndex)>,
-    map: Res<MapLayout>,
-    rules: Res<TileRules>,
-) {
-    for (tile_type, pos, mut index) in &mut tiles {
-        let new_index = rules.resolve(*tile_type, *pos, &map);
-        index.0 = new_index;
+            tile_storage.set(&pos, tile_entity);
+        }
     }
+
+    commands.entity(tilemap_entity).insert(TilemapBundle {
+        grid_size,
+        map_type,
+        size: map_size,
+        storage: tile_storage,
+        texture: TilemapTexture::Single(texture_handle),
+        tile_size,
+        anchor: TilemapAnchor::Center,
+        ..Default::default()
+    });
+
+    // Make map and rules available to future systems.
+    commands.insert_resource(map);
+    commands.insert_resource(rules);
 }
 ```
 
-You would run this in `Update` or trigger it selectively via events to avoid per-frame overhead.
+The key change is the spawn loop. Instead of a `match` on coordinates, we:
+1. Read the logical `tile_type` from `MapLayout`.
+2. Call `rules.resolve(tile_type, pos, &map)` to determine the visual atlas index.
+3. Spawn the tile with that index.
 
-### 2. Single texture atlas
+`tile_type` is attached as a component so gameplay systems can query it directly. `MapTile` and `PathTile` are preserved for compatibility with existing queries.
 
-All rules produce indices into the same `towerDefense_tilesheet.png`.
-
-**Assumption:** Every tile type variant lives in one atlas.
-
-**Why this is fine:** The Kenney pack is already a unified atlas. `bevy_ecs_tilemap` draws one tilemap layer with one texture.
-
-**How to extend:** For multi-atlas tilesets, `bevy_ecs_tilemap` supports `TilemapTexture::Vector(handles)` and `TileTextureIndex(texture_index, atlas_index)`. You would store a `(texture_id, atlas_index)` pair in each `TileRule` instead of a single `u32`.
-
-### 3. Relative neighbor matching (`Same`/`Different`)
-
-Rules check "is the neighbor the same type as me?" not "is the neighbor specifically `Grass`?"
-
-**Assumption:** Edge transitions are uniform. A path edge always looks the same regardless of whether it borders grass, sand, or water.
-
-**Why this is fine:** For our art style, the path-to-grass edge sprite works as a generic boundary.
-
-**How to extend:** Add an `Is(TileType)` variant to `NeighborMatch`:
-
-```rust
-enum NeighborMatch {
-    Same,
-    Different,
-    Is(TileType),  // new
-    Any,
-}
-```
-
-Then a water tile could have distinct edge sprites for water-to-grass vs water-to-path.
-
-### 4. No bitmask compression
-
-We store 8 `NeighborMatch` values per pattern and check them with boolean logic. A production system might compress this into an 8-bit bitmask for performance.
-
-**Assumption:** Rule sets are small (fewer than 20 rules per type).
-
-**Why this is fine:** A linear scan of 10 rules is microseconds of work, done once per tile at spawn time. For a `100×100` map that is 10,000 checks — negligible compared to asset loading and GPU upload.
-
-**How to extend:** Precompute a `u8` bitmask from the 8 neighbors and use it as a key into a lookup table. This is the standard "blob tile" approach and is well-documented in game programming literature.
-
-### 5. No runtime rule reloading
-
-Rules are compiled Rust code in `build_rules()`.
-
-**Assumption:** Tile art and transitions are fixed for the game's lifespan.
-
-**How to extend:** Serialize rules to JSON/TOML and load them as assets. Then artists can tweak transitions without recompiling the game.
+> **Run the game now.** The visual output should be identical to Part 3: a centered `15×10` grid with a horizontal dirt road across the middle. Try editing `build_demo_map()` — change `path_y` or add more path rows — and the visuals will update automatically because the rules inspect neighbors rather than coordinates.
 
 ---
 
-## Alternative: `bevy_map_editor`
+### Simplification: Static resolution at spawn time
 
-The ecosystem around Bevy tilemaps is growing. One project worth watching is [`bevy_map_editor`](https://github.com/jbuehler23/bevy_map_editor), advertised as a "complete 2D tilemap editor and runtime for Bevy games." It includes built-in auto-tiling, an editor UI for painting tiles, and serialization support.
+For now, tile visuals are resolved once inside `setup()` and never changed again. That is fine because our tower defense maps are immutable: towers sit on top of tiles but do not replace them.
 
-It is relatively new and not yet battle-tested, so we built our own auto-tiling system in this tutorial to understand the fundamentals. However, if you are building a game that needs a visual editor, rapid level iteration, or advanced tilemap features out of the box, `bevy_map_editor` may save you significant work. Evaluate it against your project's needs — especially stability and long-term maintenance — before adopting.
-
----
-
-## Running the project
-
-```bash
-cargo run
-```
-
-You should see:
-
-- A centered `15×10` grid.
-- A 3-tile-high horizontal road across the middle.
-- Corners, edges, and body tiles all correctly resolved from the rule book — no hardcoded coordinates.
-- Grass filling every other cell via the `Grass` ruleset's fallback.
-
-Try editing `build_demo_map()` to change the road width or position. The visuals update automatically because the rules inspect neighbors rather than coordinates.
+In a game with dynamic terrain (digging, building, destruction), you would add a system that re-runs resolution whenever a `TileType` changes. See `src/main.rs` in the repository for a commented example of how that system would look.
 
 ---
 
-## Recap
+## What stayed the same
 
-In this part we:
+- The atlas indices (`79`, `80`, `81`, `102`, `103`, `104`, `125`, `126`, `127`, `129`) are unchanged.
+- `MapTile` and `PathTile` marker components are preserved on tile entities.
+- The tilemap parent entity, `TileStorage`, and `TilemapBundle` are identical to Part 3.
 
-1. Separated **logical tile types** (`TileType`) from **visual atlas indices**.
-2. Built an **auto-tiling engine** with `NeighborPattern`, `TileRule`, and `TileTypeRuleset`.
-3. Used **relative neighbor matching** (`Same`/`Different`) to keep rules generic and reusable.
-4. Defined an **ordered rule set** where specific patterns (corners) match before general ones (edges, body).
-5. Stored `MapLayout` and `TileRules` as ECS resources for future systems.
-6. Explicitly discussed the **simplifications** we made, the assumptions behind them, and how to evolve the system.
+---
+
+## What we gained
+
+| Aspect | Part 3 (hardcoded) | Part 4 (auto-tiling) |
+|---|---|---|
+| Map definition | `match` on coordinates | `MapLayout` resource with `TileType` grid |
+| Visual logic | Baked into spawn code | Separated into `TileRules` resource |
+| Changing road position | Edit `match` arms | Edit `build_demo_map()` |
+| Changing art style | Edit `match` arms | Edit `TileRules` |
+| Reusability | None | Same rules work for any `Path` shape |
+
+---
+
+## Summary
+
+- We separated **logical tile types** (`TileType`) from **visual atlas indices**.
+- We built an **auto-tiling engine** with `NeighborPattern`, `TileRule`, and `TileTypeRuleset`.
+- We used **relative neighbor matching** (`Same`/`Different`) to keep rules generic and reusable.
+- We stored `MapLayout` and `TileRules` as ECS `Resource`s for future systems.
+- We preserved `MapTile` and `PathTile` so existing gameplay queries continue to work.
 
 In **Part 5** we will extract `MapLayout` from code into an external data file, completing the separation of level design from game logic.
