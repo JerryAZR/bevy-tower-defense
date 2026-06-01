@@ -59,6 +59,8 @@ There is no `use crate::tiling` inside `map.rs` — the arrow only points one wa
 
 **Pitfall:** It is tempting to make everything `pub` to avoid compiler errors. That works, but it also removes the guardrails that visibility provides. Start with the minimum visibility and widen it only when another module legitimately needs the item.
 
+If you have used object-oriented languages, the idea is the same as keeping class fields `private` and exposing them through `public` getters only when necessary. Rust's `pub` is not tied to classes, but the principle — hide implementation details and expose a clean interface — is universal.
+
 ---
 
 ## Walkthrough
