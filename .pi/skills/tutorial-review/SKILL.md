@@ -44,12 +44,24 @@ Tutorials often explain *why* a choice was made. Flag justifications that don't 
 
 These are not code bugs — the *code* is fine — but they mislead the learner about how things work.
 
-### 4. Check for missing or extra steps
+### 4. Distinguish later patches from actual errors
+
+The source tree may contain code from parts *after* the one being reviewed. When you spot a discrepancy between the tutorial and the `part-N` tag, also check the **latest commit on the branch** (`HEAD`).
+
+There are three possibilities:
+
+1. **Tutorial matches `part-N` but diverges from `HEAD`.** This is expected — later parts evolved the code. The tutorial is correct for its part.
+2. **Tutorial diverges from `part-N` in a way that matches `HEAD`.** The tutorial may have been intentionally updated to reflect a bug fix discovered in a later part. Verify the `part-N` tag shows the bug, and `HEAD` shows the fix. Treat this as an intentional tutorial improvement, not an error.
+3. **Tutorial diverges from both `part-N` and `HEAD`.** This is a genuine factual error — the tutorial does not match any version of the implementation. Flag it.
+
+> Example: A Part 11 tutorial mentions `Option<Res<GameOver>>` in `spawn_wave_enemies`, but `HEAD` removed that guard. Checking `part-11` confirms the guard existed. The discrepancy is because Part 12 replaced it with a state-machine approach. The tutorial is correct.
+
+### 5. Check for missing or extra steps
 
 - **Missing:** The implementation changed something the tutorial doesn't mention.
 - **Extra:** The tutorial describes a step that doesn't exist in the source.
 
-### 5. Scope creep check
+### 6. Scope creep check
 
 ```bash
 git diff --stat
@@ -61,7 +73,7 @@ git diff --stat
 
 If scope creep is detected, say **SCOPE CREEP** prominently in the report.
 
-### 6. Report
+### 7. Report
 
 ```
 ## Review: <tutorial-file> vs. implementation
