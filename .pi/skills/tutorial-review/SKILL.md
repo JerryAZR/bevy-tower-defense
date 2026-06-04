@@ -36,14 +36,26 @@ For each claim, open the actual source file and check it directly.
 
 ### 3. Check justifications for faulty reasoning
 
-Tutorials often explain *why* a choice was made. Flag justifications that don't hold up:
+Tutorials often explain *why* a choice was made. Flag justifications that don't hold up.
+
+**Test for false justifications: try to argue against the claim.**
+
+For every "why" in the tutorial, attempt to construct a valid counter-argument. Ask yourself:
+- Is the opposite also true? ("A is better than B" — is B actually just as good?)
+- Does the stated reason actually explain the choice? ("We do X because Y" — would Y still happen without X?)
+- Is the problem being prevented a real problem? ("We order A before B to avoid bug C" — would bug C actually occur in the opposite order?)
+- Is the claim about concurrency or timing true in Bevy's execution model? (e.g., commands flush at system end, not mid-system; `ResMut` is exclusive within a system.)
+
+If you can construct a valid counter-argument, the justification is weak or false. Flag it. If no valid counter-argument exists after a good-faith attempt, the claim is solid.
+
+Common patterns of faulty justifications:
 
 - **Claiming an order matters for correctness when both orders are equivalent.** Example: "We deduct gold before spawning so the player can't place two towers on one click" — but in single-threaded Bevy, both orders are equivalent. `commands.spawn()` is queued, `gold.0 -=` is immediate, so the outcome is identical regardless of source order.
 - **Claiming a step prevents a problem that wouldn't occur anyway.** Example: "We remove the `Gold` resource on level exit so the player's balance doesn't carry over" — but `load_level_data` already overwrites it with `Gold(STARTING_GOLD)` on the next level start. The removal is fine for intent-clarity, but the stated *reason* (carry-over) is wrong.
 - **Claiming option A is better than B because A has some property — but B also has it.** Example: "Pattern X is cleaner because it avoids extra state" — but pattern Y also avoids extra state.
+- **Claiming a consequence that is mathematically or architecturally false.** Example: "Resources written by one system are not visible to another until commands flush" — but direct `ResMut` mutations are immediate, not batched. Only `commands.insert_resource` is deferred.
 
 These are not code bugs — the *code* is fine — but they mislead the learner about how things work.
-
 ### 4. Distinguish later patches from actual errors
 
 The source tree may contain code from parts *after* the one being reviewed. When you spot a discrepancy between the tutorial and the `part-N` tag, also check the **latest commit on the branch** (`HEAD`).
