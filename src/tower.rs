@@ -1,73 +1,133 @@
 use bevy::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use serde::Deserialize;
 
 use crate::enemy::tile_to_world;
 use crate::map::{MapLayout, TileType};
 use crate::enemy::{Enemy, Health, PathFollower};
 use crate::state::GameEntity;
-use crate::economy::{Gold, Bounty, PlacementDenied, TOWER_COST, DENIED_FLASH_DURATION};
+use crate::economy::{Gold, Bounty, PlacementDenied, DENIED_FLASH_DURATION};
 
-const TOWER_BASE: usize = 180;
-const TOWER_TOP: usize = 203;
+// ---------------------------------------------------------------------------
+// tower registry — raw TOML representation
+// ---------------------------------------------------------------------------
 
-const ATTACK_RANGE: f32 = 192.0;
-const DAMAGE: f32 = 34.0;
-const ATTACK_COOLDOWN: f32 = 0.5;
-const FIRE_SPRITE: usize = 295;
+#[derive(Debug, Deserialize)]
+struct TowerRegistryRaw {
+    #[serde(rename = "towers")]
+    towers: HashMap<String, TowerDefinitionRaw>,
+    #[serde(rename = "projectiles")]
+    projectiles: HashMap<String, ProjectileDefinitionRaw>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TowerDefinitionRaw {
+    name: String,
+    description: String,
+    base_sprite: usize,
+    top_sprite: usize,
+    preview_top_sprite: usize,
+    cost: u32,
+    attack_range: f32,
+    attack_cooldown: f32,
+    damage: Option<f32>,
+    muzzle_flash_sprite: Option<usize>,
+    projectile: Option<String>,
+    ammo_slot_offsets: Option<Vec<[f32; 2]>>,
+    ammo_refill_secs: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ProjectileDefinitionRaw {
+    damage: f32,
+    speed: f32,
+    sprite: usize,
+    explosion_sprite: Option<usize>,
+    splash_radius: Option<f32>,
+}
+
+// ---------------------------------------------------------------------------
+// tower registry — runtime representation (projectile resolved at load time)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Resource)]
+pub struct TowerRegistry {
+    pub towers: HashMap<String, TowerDefinition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TowerDefinition {
+    pub name: String,
+    #[allow(dead_code)]
+    pub description: String,
+    pub base_sprite: usize,
+    pub top_sprite: usize,
+    pub preview_top_sprite: usize,
+    pub cost: u32,
+    pub attack_range: f32,
+    pub attack_cooldown: f32,
+    pub damage: Option<f32>,
+    pub muzzle_flash_sprite: Option<usize>,
+    pub projectile: Option<ProjectileDefinition>,
+    pub ammo_slot_offsets: Option<Vec<[f32; 2]>>,
+    pub ammo_refill_secs: Option<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectileDefinition {
+    pub damage: f32,
+    pub speed: f32,
+    pub sprite: usize,
+    pub explosion_sprite: Option<usize>,
+    pub splash_radius: Option<f32>,
+}
+
+// ---------------------------------------------------------------------------
+// components
+// ---------------------------------------------------------------------------
+
 const MUZZLE_FLASH_DURATION: f32 = 0.15;
-
-// Rocket launcher constants (hardcoded for Part 15)
-const ROCKET_LAUNCHER_BASE: usize = 182;
-const ROCKET_LAUNCHER_BARREL: usize = 228;
-const ROCKET_SPRITE: usize = 251;
-const EXPLOSION_SPRITE: usize = 21;
-const ROCKET_MAX_AMMO: u8 = 3;
-const AMMO_REFILL_SECS: f32 = 2.0;
-const ATTACK_PAUSE_SECS: f32 = 0.3;
-const ROCKET_SPEED: f32 = 600.0;
-const ROCKET_DAMAGE: f32 = 50.0;
-const SPLASH_RADIUS: f32 = 60.0;
-const AMMO_SLOT_OFFSETS: [(f32, f32); 3] = [(0.0, 8.0), (-12.0, 8.0), (12.0, 8.0)];
-#[derive(Component)]
-pub struct Tower;
-
-#[derive(Component)]
-pub(crate) struct TowerTurret;
 
 #[derive(Component)]
 pub(crate) struct TowerPreview;
 
+/// Shared combat state on every tower that can shoot (instant or rocket).
 #[derive(Component)]
-pub(crate) struct AttackRange(pub f32);
+pub(crate) struct TowerAttacker {
+    pub range: f32,
+    pub timer: Timer,
+}
+
+/// Instant-tower-specific state. Also acts as the discriminator:
+/// `With<InstantShooter>` finds instant towers.
+#[derive(Component)]
+pub(crate) struct InstantShooter {
+    pub damage: f32,
+    pub muzzle_flash_sprite: usize,
+}
+
+/// Rocket-tower-specific state. Also acts as the discriminator:
+/// `With<AmmoState>` finds rocket launchers.
+#[derive(Component)]
+pub(crate) struct AmmoState {
+    pub regen: Timer,
+    pub slots: Vec<Option<Entity>>,
+}
 
 #[derive(Component)]
-pub(crate) struct Damage(pub f32);
-
-#[derive(Component)]
-pub(crate) struct AttackTimer(pub Timer);
+pub(crate) struct TowerTypeId(pub String);
 
 #[derive(Component)]
 pub(crate) struct DespawnTimer(pub Timer);
 
 #[derive(Component)]
-pub(crate) struct RocketLauncher;
-
-#[derive(Component)]
-pub(crate) struct AmmoSlots {
-    pub slots: Vec<Option<Entity>>,
-}
-
-#[derive(Component)]
-pub(crate) struct AmmoRegenTimer(pub Timer);
-
-
-#[derive(Component)]
 pub(crate) struct Projectile {
-    pub target: Entity,        // homing target — updated each frame
-    pub target_position: Vec2, // fallback if target dies
+    pub target: Entity,
+    pub target_position: Vec2,
     pub speed: f32,
     pub damage: f32,
     pub splash_radius: f32,
+    pub explosion_sprite: usize,
 }
 
 #[derive(Component)]
@@ -75,6 +135,7 @@ pub(crate) struct Exploding;
 
 #[derive(Component)]
 pub(crate) struct MuzzleFlash;
+
 #[derive(Resource)]
 pub struct TowerAtlas {
     texture: Handle<Image>,
@@ -83,6 +144,9 @@ pub struct TowerAtlas {
 
 #[derive(Resource, Default)]
 pub struct PlacedTowers(pub HashSet<[u32; 2]>);
+
+#[derive(Resource)]
+pub struct SelectedTowerType(pub String);
 
 pub fn setup_tower_atlas(
     mut commands: Commands,
@@ -95,6 +159,47 @@ pub fn setup_tower_atlas(
         texture,
         layout: texture_atlas_layouts.add(layout),
     });
+}
+
+pub fn load_tower_registry(mut commands: Commands) {
+    let raw: TowerRegistryRaw = {
+        let content = std::fs::read_to_string("assets/towers.toml")
+            .unwrap_or_else(|e| panic!("Failed to read assets/towers.toml: {}", e));
+        toml::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse assets/towers.toml: {}", e))
+    };
+
+    let mut towers = HashMap::new();
+    for (id, def_raw) in raw.towers {
+        let projectile = def_raw.projectile.as_ref().and_then(|p| {
+            raw.projectiles.get(p).cloned().map(|pr| ProjectileDefinition {
+                damage: pr.damage,
+                speed: pr.speed,
+                sprite: pr.sprite,
+                explosion_sprite: pr.explosion_sprite,
+                splash_radius: pr.splash_radius,
+            })
+        });
+
+        towers.insert(id, TowerDefinition {
+            name: def_raw.name,
+            description: def_raw.description,
+            base_sprite: def_raw.base_sprite,
+            top_sprite: def_raw.top_sprite,
+            preview_top_sprite: def_raw.preview_top_sprite,
+            cost: def_raw.cost,
+            attack_range: def_raw.attack_range,
+            attack_cooldown: def_raw.attack_cooldown,
+            damage: def_raw.damage,
+            muzzle_flash_sprite: def_raw.muzzle_flash_sprite,
+            projectile,
+            ammo_slot_offsets: def_raw.ammo_slot_offsets,
+            ammo_refill_secs: def_raw.ammo_refill_secs,
+        });
+    }
+
+    commands.insert_resource(TowerRegistry { towers });
+    commands.insert_resource(SelectedTowerType("rocket".to_string()));
 }
 
 /// Returns the tile under the cursor if it is an unoccupied grass tile.
@@ -121,6 +226,8 @@ fn hovered_placeable_tile(
 pub fn spawn_placement_preview(
     mut commands: Commands,
     atlas: Res<TowerAtlas>,
+    registry: Res<TowerRegistry>,
+    selected: Res<SelectedTowerType>,
 ) {
     let tinted = |index: usize| Sprite {
         color: Color::srgba(1.0, 1.0, 1.0, 0.5),
@@ -130,17 +237,20 @@ pub fn spawn_placement_preview(
         )
     };
 
+    let def = registry.towers.get(&selected.0)
+        .unwrap_or_else(|| panic!("Unknown tower type: {}", selected.0));
+
     commands.spawn((
         TowerPreview,
         GameEntity,
-        tinted(ROCKET_LAUNCHER_BASE),
+        tinted(def.base_sprite),
         Transform::from_xyz(0.0, 0.0, 2.0),
         Visibility::Hidden,
     ));
     commands.spawn((
         TowerPreview,
         GameEntity,
-        tinted(ROCKET_LAUNCHER_BARREL),
+        tinted(def.preview_top_sprite),
         Transform::from_xyz(0.0, 0.0, 2.1),
         Visibility::Hidden,
     ));
@@ -152,6 +262,8 @@ pub fn update_placement_preview(
     map_layout: Res<MapLayout>,
     placed: Res<PlacedTowers>,
     gold: Res<Gold>,
+    registry: Res<TowerRegistry>,
+    selected: Res<SelectedTowerType>,
     // We need &mut Sprite to tint the preview red on denied placement.
     // Option<&PlacementDenied> tells us whether the flash is active.
     mut preview_q: Query<(&mut Transform, &mut Visibility, &mut Sprite, Option<&PlacementDenied>), With<TowerPreview>>,
@@ -168,8 +280,10 @@ pub fn update_placement_preview(
     };
 
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
-    // Preview is green when affordable, white when neutral, red when denied.
-    let can_afford = gold.0 >= TOWER_COST as f32;
+
+    let def = registry.towers.get(&selected.0)
+        .expect("Selected tower type must exist in registry");
+    let can_afford = gold.0 >= def.cost as f32;
 
     for (mut transform, mut vis, mut sprite, denied) in preview_q.iter_mut() {
         transform.translation.x = pos.x;
@@ -188,82 +302,100 @@ pub fn update_placement_preview(
         }
     }
 }
-/// Spawns the original instant-damage tower (base + turret).
-/// Kept for easy re-enable when multi-tower selection arrives.
+
+/// Spawns an instant-damage tower (base + turret).
+/// Reads all stats from the tower definition.
 fn spawn_instant_tower(
     commands: &mut Commands,
     atlas: &TowerAtlas,
+    def: &TowerDefinition,
+    tower_key: &str,
     pos: Vec2,
 ) {
     commands.spawn((
-        Tower,
         GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
-            TextureAtlas { layout: atlas.layout.clone(), index: TOWER_BASE },
+            TextureAtlas { layout: atlas.layout.clone(), index: def.base_sprite },
         ),
         Transform::from_xyz(pos.x, pos.y, 2.0),
     ));
 
     commands.spawn((
-        TowerTurret,
+        TowerTypeId(tower_key.to_string()),
         GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
-            TextureAtlas { layout: atlas.layout.clone(), index: TOWER_TOP },
+            TextureAtlas { layout: atlas.layout.clone(), index: def.top_sprite },
         ),
         Transform::from_xyz(pos.x, pos.y, 2.1),
-        AttackRange(ATTACK_RANGE),
-        Damage(DAMAGE),
-        AttackTimer(Timer::from_seconds(ATTACK_COOLDOWN, TimerMode::Repeating)),
+        TowerAttacker {
+            range: def.attack_range,
+            timer: Timer::from_seconds(def.attack_cooldown, TimerMode::Repeating),
+        },
+        InstantShooter {
+            damage: def.damage.expect("instant tower must have damage"),
+            muzzle_flash_sprite: def.muzzle_flash_sprite.expect("instant tower must have muzzle_flash_sprite"),
+        },
     ));
 }
-
-/// Spawns the rocket launcher tower (base + rotating barrel + ammo slots).
+/// Spawns a rocket launcher tower (base + barrel + ammo slots).
+/// Reads all stats from the tower definition.
 fn spawn_rocket_launcher(
     commands: &mut Commands,
     atlas: &TowerAtlas,
+    def: &TowerDefinition,
+    tower_key: &str,
     pos: Vec2,
 ) {
     commands.spawn((
-        Tower,
         GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
-            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_LAUNCHER_BASE },
+            TextureAtlas { layout: atlas.layout.clone(), index: def.base_sprite },
         ),
         Transform::from_xyz(pos.x, pos.y, 2.0),
     ));
 
+    let ammo_offsets = def.ammo_slot_offsets.clone()
+        .expect("rocket tower must have ammo_slot_offsets");
+    let ammo_refill = def.ammo_refill_secs
+        .expect("rocket tower must have ammo_refill_secs");
+    let ammo_sprite = def.projectile.as_ref()
+        .expect("rocket tower must have a projectile definition")
+        .sprite;
+
+    let mut slot_entities = vec![None; ammo_offsets.len()];
     let turret_entity = commands.spawn((
-        RocketLauncher,
+        TowerTypeId(tower_key.to_string()),
         GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
-            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_LAUNCHER_BARREL },
+            TextureAtlas { layout: atlas.layout.clone(), index: def.top_sprite },
         ),
         Transform::from_xyz(pos.x, pos.y, 2.1),
-        AttackRange(ATTACK_RANGE),
-        AttackTimer(Timer::from_seconds(ATTACK_PAUSE_SECS, TimerMode::Repeating)),
-        AmmoRegenTimer(Timer::from_seconds(AMMO_REFILL_SECS, TimerMode::Repeating)),
-        AmmoSlots { slots: vec![None; ROCKET_MAX_AMMO as usize] },
+        TowerAttacker {
+            range: def.attack_range,
+            timer: Timer::from_seconds(def.attack_cooldown, TimerMode::Repeating),
+        },
     )).id();
 
-    let mut slot_entities = vec![None; ROCKET_MAX_AMMO as usize];
     commands.entity(turret_entity).with_children(|turret_children| {
-        for i in 0..ROCKET_MAX_AMMO {
-            let offset = AMMO_SLOT_OFFSETS[i as usize];
+        for (i, offset) in ammo_offsets.iter().enumerate() {
             let slot_entity = turret_children.spawn((
                 Sprite::from_atlas_image(
                     atlas.texture.clone(),
-                    TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_SPRITE },
+                    TextureAtlas { layout: atlas.layout.clone(), index: ammo_sprite },
                 ),
-                Transform::from_xyz(offset.0, offset.1, 2.2),
+                Transform::from_xyz(offset[0], offset[1], 2.2),
             )).id();
-            slot_entities[i as usize] = Some(slot_entity);
+            slot_entities[i] = Some(slot_entity);
         }
     });
-    commands.entity(turret_entity).insert(AmmoSlots { slots: slot_entities });
+    commands.entity(turret_entity).insert(AmmoState {
+        regen: Timer::from_seconds(ammo_refill, TimerMode::Repeating),
+        slots: slot_entities,
+    });
 }
 
 pub fn place_tower_on_click(
@@ -275,6 +407,8 @@ pub fn place_tower_on_click(
     mut placed: ResMut<PlacedTowers>,
     mut gold: ResMut<Gold>,
     atlas: Res<TowerAtlas>,
+    registry: Res<TowerRegistry>,
+    selected: Res<SelectedTowerType>,
     // Query preview entities so we can attach the PlacementDenied flash.
     preview_q: Query<Entity, With<TowerPreview>>,
 ) {
@@ -290,9 +424,12 @@ pub fn place_tower_on_click(
         return;
     };
 
+    let def = registry.towers.get(&selected.0)
+        .expect("Selected tower type must exist in registry");
+
     // Check affordability — if the player can't pay, flash the preview red
     // instead of silently ignoring the click.
-    if gold.0 < TOWER_COST as f32 {
+    if gold.0 < def.cost as f32 {
         for preview_entity in preview_q.iter() {
             commands.entity(preview_entity).insert(PlacementDenied(
                 Timer::from_seconds(DENIED_FLASH_DURATION, TimerMode::Once),
@@ -304,21 +441,24 @@ pub fn place_tower_on_click(
     // Deduct the cost *before* spawning the tower so the player can't
     // accidentally place two towers on one click (the second would fail
     // the affordability check).
-    gold.0 -= TOWER_COST as f32;
+    gold.0 -= def.cost as f32;
     placed.0.insert(tile);
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
-    // For Part 15 only the rocket launcher is spawnable.
-    spawn_rocket_launcher(&mut commands, &atlas, pos);
+    if def.damage.is_some() {
+        spawn_instant_tower(&mut commands, &atlas, def, &selected.0, pos);
+    } else {
+        spawn_rocket_launcher(&mut commands, &atlas, def, &selected.0, pos);
+    }
 }
 
 pub fn attack_enemies(
     time: Res<Time>,
     atlas: Res<TowerAtlas>,
     mut gold: ResMut<Gold>,
-    mut turrets: Query<(Entity, &mut Transform, &mut AttackTimer, &Damage, &AttackRange), (With<TowerTurret>, Without<Enemy>)>,
+    mut turrets: Query<(Entity, &mut Transform, &mut TowerAttacker, &InstantShooter), Without<Enemy>>,
     // Include Bounty so we can reward the player on kill.
-    mut enemies: Query<(Entity, &Transform, &mut Health, &Bounty), (With<Enemy>, With<PathFollower>, Without<TowerTurret>)>,
+    mut enemies: Query<(Entity, &Transform, &mut Health, &Bounty), (With<Enemy>, With<PathFollower>, Without<InstantShooter>)>,
     mut commands: Commands,
 ) {
     // Snapshot enemy positions, then release the query borrow.
@@ -327,15 +467,15 @@ pub fn attack_enemies(
         .map(|(e, t, ..)| (e, t.translation.truncate()))
         .collect();
 
-    for (turret_entity, mut turret_transform, mut timer, damage, range) in turrets.iter_mut() {
-        timer.0.tick(time.delta());
+    for (turret_entity, mut turret_transform, mut attacker, instant) in turrets.iter_mut() {
+        attacker.timer.tick(time.delta());
         let turret_pos = turret_transform.translation.truncate();
 
         // Find nearest enemy within range
         let mut nearest: Option<(Entity, f32)> = None;
         for &(entity, pos) in &enemy_positions {
             let dist = turret_pos.distance(pos);
-            if dist <= range.0 {
+            if dist <= attacker.range {
                 if nearest.map_or(true, |(_, best)| dist < best) {
                     nearest = Some((entity, dist));
                 }
@@ -350,11 +490,11 @@ pub fn attack_enemies(
             let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
             turret_transform.rotation = Quat::from_rotation_z(angle);
 
-            if timer.0.just_finished() {
+            if attacker.timer.just_finished() {
                 // Deal damage and collect bounty if the enemy dies.
                 if let Ok((entity, _, mut health, bounty)) = enemies.get_mut(target) {
                     if health.0 > 0.0 {
-                        health.0 -= damage.0;
+                        health.0 -= instant.damage;
                         if health.0 <= 0.0 {
                             // Enemy killed — award its bounty to the player.
                             gold.0 += bounty.0 as f32;
@@ -377,7 +517,7 @@ pub fn attack_enemies(
                             let x_offset = if i == 0 {-6.0} else {6.0};
                             flash_children.spawn((Sprite::from_atlas_image(
                                 texture.clone(),
-                                TextureAtlas { layout: layout.clone(), index: FIRE_SPRITE },
+                                TextureAtlas { layout: layout.clone(), index: instant.muzzle_flash_sprite },
                             ),
                                 Transform::from_xyz(x_offset, 32.0, 2.2),
                             ));
@@ -401,27 +541,35 @@ pub fn despawn_timed(
         }
     }
 }
-
 pub fn refill_ammo(
     time: Res<Time>,
-    mut turrets: Query<(Entity, &mut AmmoRegenTimer, &mut AmmoSlots), With<RocketLauncher>>,
+    mut turrets: Query<(Entity, &TowerTypeId, &mut AmmoState)>,
     mut commands: Commands,
     atlas: Res<TowerAtlas>,
+    registry: Res<TowerRegistry>,
 ) {
-    for (turret_entity, mut regen, mut ammo) in turrets.iter_mut() {
-        regen.0.tick(time.delta());
-        if regen.0.just_finished() {
+    for (turret_entity, tower_id, mut ammo) in turrets.iter_mut() {
+        ammo.regen.tick(time.delta());
+        if ammo.regen.just_finished() {
             let empty_idx = ammo.slots.iter().position(|s| s.is_none());
             if let Some(idx) = empty_idx {
+                let def = registry.towers.get(&tower_id.0)
+                    .expect("Tower type must exist in registry");
+                let ammo_offsets = def.ammo_slot_offsets.as_ref()
+                    .expect("rocket tower must have ammo_slot_offsets");
+                let ammo_sprite = def.projectile.as_ref()
+                    .expect("rocket tower must have a projectile definition")
+                    .sprite;
+                let offset = ammo_offsets[idx];
+
                 let mut new_entity = None;
                 commands.entity(turret_entity).with_children(|turret_children| {
-                    let offset = AMMO_SLOT_OFFSETS[idx];
                     new_entity = Some(turret_children.spawn((
                         Sprite::from_atlas_image(
                             atlas.texture.clone(),
-                            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_SPRITE },
+                            TextureAtlas { layout: atlas.layout.clone(), index: ammo_sprite },
                         ),
-                        Transform::from_xyz(offset.0, offset.1, 2.2),
+                        Transform::from_xyz(offset[0], offset[1], 2.2),
                     )).id());
                 });
                 if let Some(entity) = new_entity {
@@ -435,24 +583,25 @@ pub fn refill_ammo(
 pub fn launch_rockets(
     time: Res<Time>,
     atlas: Res<TowerAtlas>,
-    mut turrets: Query<(Entity, &mut Transform, &mut AttackTimer, &AttackRange, &mut AmmoSlots), (With<RocketLauncher>, Without<Enemy>)>,
-    enemies: Query<(Entity, &Transform), (With<Enemy>, With<PathFollower>, Without<TowerTurret>, Without<RocketLauncher>)>,
+    mut turrets: Query<(Entity, &mut Transform, &mut TowerAttacker, &mut AmmoState, &TowerTypeId), Without<Enemy>>,
+    enemies: Query<(Entity, &Transform), (With<Enemy>, With<PathFollower>, Without<AmmoState>)>,
     slot_transforms: Query<&GlobalTransform>,
     mut commands: Commands,
+    registry: Res<TowerRegistry>,
 ) {
     let enemy_positions: Vec<(Entity, Vec2)> = enemies
         .iter()
         .map(|(e, t)| (e, t.translation.truncate()))
         .collect();
 
-    for (_turret_entity, mut turret_transform, mut timer, range, mut ammo) in turrets.iter_mut() {
-        timer.0.tick(time.delta());
+    for (_turret_entity, mut turret_transform, mut attacker, mut ammo, tower_id) in turrets.iter_mut() {
+        attacker.timer.tick(time.delta());
         let turret_pos = turret_transform.translation.truncate();
 
         let mut nearest: Option<(Entity, f32)> = None;
         for &(entity, pos) in &enemy_positions {
             let dist = turret_pos.distance(pos);
-            if dist <= range.0 {
+            if dist <= attacker.range {
                 if nearest.map_or(true, |(_, best)| dist < best) {
                     nearest = Some((entity, dist));
                 }
@@ -467,7 +616,7 @@ pub fn launch_rockets(
             let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
             turret_transform.rotation = Quat::from_rotation_z(angle);
 
-            if timer.0.just_finished() {
+            if attacker.timer.just_finished() {
                 let slot_idx = ammo.slots.iter().position(|s| s.is_some());
                 if let Some(idx) = slot_idx {
                     let ammo_entity = ammo.slots[idx].take().unwrap();
@@ -483,18 +632,24 @@ pub fn launch_rockets(
                         .map(|(_, p)| *p)
                         .unwrap_or(turret_pos + direction);
 
+                    let def = registry.towers.get(&tower_id.0)
+                        .expect("Tower type must exist in registry");
+                    let proj_def = def.projectile.as_ref()
+                        .expect("rocket tower must have a projectile definition");
+
                     commands.spawn((
                         Projectile {
                             target,
                             target_position: target_pos,
-                            speed: ROCKET_SPEED,
-                            damage: ROCKET_DAMAGE,
-                            splash_radius: SPLASH_RADIUS,
+                            speed: proj_def.speed,
+                            damage: proj_def.damage,
+                            splash_radius: proj_def.splash_radius.unwrap_or(0.0),
+                            explosion_sprite: proj_def.explosion_sprite.unwrap_or(0),
                         },
                         GameEntity,
                         Sprite::from_atlas_image(
                             atlas.texture.clone(),
-                            TextureAtlas { layout: atlas.layout.clone(), index: ROCKET_SPRITE },
+                            TextureAtlas { layout: atlas.layout.clone(), index: proj_def.sprite },
                         ),
                         Transform::from_xyz(spawn_pos.x, spawn_pos.y, 2.3),
                     ));
@@ -566,7 +721,7 @@ pub fn explode_projectiles(
             DespawnTimer(Timer::from_seconds(0.15, TimerMode::Once)),
             Sprite::from_atlas_image(
                 atlas.texture.clone(),
-                TextureAtlas { layout: atlas.layout.clone(), index: EXPLOSION_SPRITE },
+                TextureAtlas { layout: atlas.layout.clone(), index: projectile.explosion_sprite },
             ),
             Transform::from_xyz(pos.x, pos.y, 2.4),
             Visibility::default(),

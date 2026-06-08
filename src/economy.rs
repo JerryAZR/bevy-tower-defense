@@ -30,10 +30,6 @@ pub const STARTING_GOLD: f32 = 300.0;
 /// Gold earned per second, passively, as long as the level is running.
 pub const PASSIVE_INCOME_RATE: f32 = 3.0;
 
-/// Cost to place one tower.  Hardcoded — will become data-driven when we
-/// add multiple tower types.
-pub const TOWER_COST: u32 = 150;
-
 /// How long the placement preview stays red after the player tries to place
 /// a tower they cannot afford.
 pub const DENIED_FLASH_DURATION: f32 = 0.3;

@@ -1,0 +1,31 @@
+[towers.rapid]
+name = "Rapid Turret"
+description = "Fast-firing turret with moderate damage."
+base_sprite = 180
+top_sprite = 203
+preview_top_sprite = 203
+cost = 100
+attack_range = 192.0
+attack_cooldown = 0.5
+damage = 34.0
+muzzle_flash_sprite = 295
+
+[towers.rocket]
+name = "Rocket Launcher"
+description = "Slow-firing launcher with homing rockets and splash damage."
+base_sprite = 182
+top_sprite = 228
+preview_top_sprite = 228
+cost = 150
+attack_range = 192.0
+attack_cooldown = 0.3
+projectile = "rocket"
+ammo_slot_offsets = [[0.0, 8.0], [-12.0, 8.0], [12.0, 8.0]]
+ammo_refill_secs = 2.0
+
+[projectiles.rocket]
+damage = 50.0
+speed = 600.0
+sprite = 251
+explosion_sprite = 21
+splash_radius = 60.0
