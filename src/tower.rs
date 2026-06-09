@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::input::mouse::MouseWheel;
+use bevy::ecs::message::MessageReader;
 use std::collections::{HashMap, HashSet};
 use serde::Deserialize;
 
@@ -52,7 +54,7 @@ struct ProjectileDefinitionRaw {
 
 #[derive(Debug, Clone, Resource)]
 pub struct TowerRegistry {
-    pub towers: HashMap<String, TowerDefinition>,
+    pub towers: Vec<TowerDefinition>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +117,7 @@ pub(crate) struct AmmoState {
 }
 
 #[derive(Component)]
-pub(crate) struct TowerTypeId(pub String);
+pub(crate) struct TowerTypeId(pub usize);
 
 #[derive(Component)]
 pub(crate) struct DespawnTimer(pub Timer);
@@ -146,7 +148,7 @@ pub struct TowerAtlas {
 pub struct PlacedTowers(pub HashSet<[u32; 2]>);
 
 #[derive(Resource)]
-pub struct SelectedTowerType(pub String);
+pub struct SelectedTowerType(pub usize);
 
 pub fn setup_tower_atlas(
     mut commands: Commands,
@@ -169,8 +171,7 @@ pub fn load_tower_registry(mut commands: Commands) {
             .unwrap_or_else(|e| panic!("Failed to parse assets/towers.toml: {}", e))
     };
 
-    let mut towers = HashMap::new();
-    for (id, def_raw) in raw.towers {
+    let towers_vec: Vec<TowerDefinition> = raw.towers.into_values().map(|def_raw| {
         let projectile = def_raw.projectile.as_ref().and_then(|p| {
             raw.projectiles.get(p).cloned().map(|pr| ProjectileDefinition {
                 damage: pr.damage,
@@ -181,7 +182,7 @@ pub fn load_tower_registry(mut commands: Commands) {
             })
         });
 
-        towers.insert(id, TowerDefinition {
+        TowerDefinition {
             name: def_raw.name,
             description: def_raw.description,
             base_sprite: def_raw.base_sprite,
@@ -195,11 +196,14 @@ pub fn load_tower_registry(mut commands: Commands) {
             projectile,
             ammo_slot_offsets: def_raw.ammo_slot_offsets,
             ammo_refill_secs: def_raw.ammo_refill_secs,
-        });
-    }
+        }
+    }).collect();
 
-    commands.insert_resource(TowerRegistry { towers });
-    commands.insert_resource(SelectedTowerType("rocket".to_string()));
+    // Order is arbitrary — the index into this vector becomes the tower's
+    // canonical ID for the rest of the game.
+    commands.insert_resource(TowerRegistry { towers: towers_vec });
+    commands.insert_resource(SelectedTowerType(0));
+
 }
 
 /// Returns the tile under the cursor if it is an unoccupied grass tile.
@@ -237,8 +241,8 @@ pub fn spawn_placement_preview(
         )
     };
 
-    let def = registry.towers.get(&selected.0)
-        .unwrap_or_else(|| panic!("Unknown tower type: {}", selected.0));
+    let def = registry.towers.get(selected.0)
+        .unwrap_or_else(|| panic!("Selected tower index out of bounds: {}", selected.0));
 
     commands.spawn((
         TowerPreview,
@@ -255,7 +259,6 @@ pub fn spawn_placement_preview(
         Visibility::Hidden,
     ));
 }
-
 pub fn update_placement_preview(
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
@@ -281,11 +284,19 @@ pub fn update_placement_preview(
 
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
-    let def = registry.towers.get(&selected.0)
-        .expect("Selected tower type must exist in registry");
+    let def = registry.towers.get(selected.0)
+        .expect("Selected tower index must be in registry");
     let can_afford = gold.0 >= def.cost as f32;
 
-    for (mut transform, mut vis, mut sprite, denied) in preview_q.iter_mut() {
+    let mut previews: Vec<_> = preview_q.iter_mut().collect();
+    assert_eq!(previews.len(), 2, "placement preview must have exactly 2 entities");
+    previews.sort_by(|a, b| a.0.translation.z.total_cmp(&b.0.translation.z));
+
+    // Lower z = base sprite, higher z = top preview sprite.
+    previews[0].2.texture_atlas.as_mut().unwrap().index = def.base_sprite;
+    previews[1].2.texture_atlas.as_mut().unwrap().index = def.preview_top_sprite;
+
+    for (mut transform, mut vis, mut sprite, denied) in previews {
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
         *vis = Visibility::Visible;
@@ -309,7 +320,7 @@ fn spawn_instant_tower(
     commands: &mut Commands,
     atlas: &TowerAtlas,
     def: &TowerDefinition,
-    tower_key: &str,
+    tower_id: usize,
     pos: Vec2,
 ) {
     commands.spawn((
@@ -322,7 +333,7 @@ fn spawn_instant_tower(
     ));
 
     commands.spawn((
-        TowerTypeId(tower_key.to_string()),
+        TowerTypeId(tower_id),
         GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
@@ -345,7 +356,7 @@ fn spawn_rocket_launcher(
     commands: &mut Commands,
     atlas: &TowerAtlas,
     def: &TowerDefinition,
-    tower_key: &str,
+    tower_id: usize,
     pos: Vec2,
 ) {
     commands.spawn((
@@ -367,7 +378,7 @@ fn spawn_rocket_launcher(
 
     let mut slot_entities = vec![None; ammo_offsets.len()];
     let turret_entity = commands.spawn((
-        TowerTypeId(tower_key.to_string()),
+        TowerTypeId(tower_id),
         GameEntity,
         Sprite::from_atlas_image(
             atlas.texture.clone(),
@@ -424,8 +435,8 @@ pub fn place_tower_on_click(
         return;
     };
 
-    let def = registry.towers.get(&selected.0)
-        .expect("Selected tower type must exist in registry");
+    let def = registry.towers.get(selected.0)
+        .expect("Selected tower index must be in registry");
 
     // Check affordability — if the player can't pay, flash the preview red
     // instead of silently ignoring the click.
@@ -446,9 +457,9 @@ pub fn place_tower_on_click(
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
     if def.damage.is_some() {
-        spawn_instant_tower(&mut commands, &atlas, def, &selected.0, pos);
+        spawn_instant_tower(&mut commands, &atlas, def, selected.0, pos);
     } else {
-        spawn_rocket_launcher(&mut commands, &atlas, def, &selected.0, pos);
+        spawn_rocket_launcher(&mut commands, &atlas, def, selected.0, pos);
     }
 }
 
@@ -553,7 +564,7 @@ pub fn refill_ammo(
         if ammo.regen.just_finished() {
             let empty_idx = ammo.slots.iter().position(|s| s.is_none());
             if let Some(idx) = empty_idx {
-                let def = registry.towers.get(&tower_id.0)
+                let def = registry.towers.get(tower_id.0)
                     .expect("Tower type must exist in registry");
                 let ammo_offsets = def.ammo_slot_offsets.as_ref()
                     .expect("rocket tower must have ammo_slot_offsets");
@@ -632,7 +643,7 @@ pub fn launch_rockets(
                         .map(|(_, p)| *p)
                         .unwrap_or(turret_pos + direction);
 
-                    let def = registry.towers.get(&tower_id.0)
+                    let def = registry.towers.get(tower_id.0)
                         .expect("Tower type must exist in registry");
                     let proj_def = def.projectile.as_ref()
                         .expect("rocket tower must have a projectile definition");
@@ -728,6 +739,185 @@ pub fn explode_projectiles(
         ));
 
         commands.entity(proj_entity).despawn();
+    }
+}
+// ---------------------------------------------------------------------------
+// tower selection dock UI
+// ---------------------------------------------------------------------------
+
+#[derive(Component)]
+pub(crate) struct TowerDock;
+
+#[derive(Component)]
+pub(crate) struct TowerDockSlot(pub usize);
+
+const DOCK_SLOT_SIZE: f32 = 80.0;
+const DOCK_SLOT_GAP: f32 = 8.0;
+const DOCK_BG: Color = Color::srgba(0.12, 0.12, 0.12, 0.9);
+const DOCK_BORDER_DEFAULT: Color = Color::srgba(0.3, 0.3, 0.3, 1.0);
+const DOCK_BORDER_SELECTED: Color = Color::srgba(1.0, 0.84, 0.0, 1.0);  // gold
+
+pub fn setup_tower_dock(
+    mut commands: Commands,
+    atlas: Res<TowerAtlas>,
+    registry: Res<TowerRegistry>,
+    mut selected: ResMut<SelectedTowerType>,
+) {
+    // Reset selection so the highlight system fires on the first frame
+    // of every level (the dock entities are newly spawned).
+    selected.0 = 0;
+
+    // Root container: full-width strip at the bottom, flexbox-centered.
+    commands.spawn((
+        TowerDock,
+        GameEntity,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(16.0),
+            width: Val::Percent(100.0),
+            height: Val::Px(DOCK_SLOT_SIZE + 16.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::End,
+            column_gap: Val::Px(DOCK_SLOT_GAP),
+            ..default()
+        },
+    )).with_children(|dock| {
+        for (i, def) in registry.towers.iter().enumerate() {
+            dock.spawn((
+                TowerDockSlot(i),
+                Interaction::None,
+                Node {
+                    width: Val::Px(DOCK_SLOT_SIZE),
+                    height: Val::Px(DOCK_SLOT_SIZE + 10.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    row_gap: Val::Px(2.0),
+                    padding: UiRect::all(Val::Px(4.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(DOCK_BG),
+                BorderColor::all(DOCK_BORDER_DEFAULT),
+            )).with_children(|slot| {
+                // Key number badge (top-right)
+                slot.spawn((
+                    Text::new((i + 1).to_string()),
+                    TextFont { font_size: 12.0, ..default() },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(2.0),
+                        right: Val::Px(4.0),
+                        ..default()
+                    },
+                ));
+
+                // Tower preview sprite
+                slot.spawn((
+                    ImageNode::from_atlas_image(
+                        atlas.texture.clone(),
+                        TextureAtlas {
+                            layout: atlas.layout.clone(),
+                            index: def.preview_top_sprite,
+                        },
+                    ),
+                    Node {
+                        width: Val::Px(44.0),
+                        height: Val::Px(44.0),
+                        ..default()
+                    },
+                ));
+
+                // Name
+                slot.spawn((
+                    Text::new(def.name.clone()),
+                    TextFont { font_size: 13.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+
+                // Cost
+                slot.spawn((
+                    Text::new(format!("${}", def.cost)),
+                    TextFont { font_size: 12.0, ..default() },
+                    TextColor(Color::srgba(0.7, 1.0, 0.7, 1.0)),
+                ));
+            });
+        }
+    });
+}
+
+/// Updates slot border colors when the selected tower changes.
+pub fn update_dock_selection(
+    selected: Res<SelectedTowerType>,
+    mut slots: Query<(&TowerDockSlot, &mut BorderColor)>,
+) {
+    if selected.is_changed() {
+        for (slot, mut border) in slots.iter_mut() {
+            let color = if slot.0 == selected.0 {
+                DOCK_BORDER_SELECTED
+            } else {
+                DOCK_BORDER_DEFAULT
+            };
+            border.top = color;
+            border.right = color;
+            border.bottom = color;
+            border.left = color;
+        }
+    }
+}
+
+/// Clicking a dock slot selects that tower.
+pub fn handle_dock_slot_click(
+    slots: Query<(&TowerDockSlot, &Interaction), Changed<Interaction>>,
+    mut selected: ResMut<SelectedTowerType>,
+) {
+    for (slot, interaction) in slots.iter() {
+        if *interaction == Interaction::Pressed {
+            selected.0 = slot.0;
+        }
+    }
+}
+
+/// Cycles the selected tower on mouse-wheel scroll.
+/// Only the first scroll event each frame is processed — one step per tick.
+pub fn cycle_tower_on_scroll(
+    mut scroll: MessageReader<MouseWheel>,
+    registry: Res<TowerRegistry>,
+    mut selected: ResMut<SelectedTowerType>,
+) {
+    let len = registry.towers.len();
+    if len == 0 {
+        return;
+    }
+    let Some(ev) = scroll.read().next() else {
+        return;
+    };
+    if ev.y < 0.0 && selected.0 + 1 < len {
+        selected.0 += 1;
+    } else if ev.y > 0.0 && selected.0 > 0 {
+        selected.0 -= 1;
+    }
+}
+
+/// Selects a tower directly via number keys (1–5).
+/// Keys map to towers in registry order.
+pub fn select_tower_by_key(
+    kb: Res<ButtonInput<KeyCode>>,
+    registry: Res<TowerRegistry>,
+    mut selected: ResMut<SelectedTowerType>,
+) {
+    let keycodes = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+    ];
+    for (i, keycode) in keycodes.iter().enumerate() {
+        if i < registry.towers.len() && kb.just_pressed(*keycode) {
+            selected.0 = i;
+        }
     }
 }
 

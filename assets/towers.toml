@@ -15,7 +15,7 @@ name = "Rocket Launcher"
 description = "Slow-firing launcher with homing rockets and splash damage."
 base_sprite = 182
 top_sprite = 228
-preview_top_sprite = 228
+preview_top_sprite = 205
 cost = 150
 attack_range = 192.0
 attack_cooldown = 0.3
@@ -28,4 +28,23 @@ damage = 50.0
 speed = 600.0
 sprite = 251
 explosion_sprite = 21
-splash_radius = 60.0
+
+[towers.big_rocket]
+name = "Big Rocket"
+description = "Slow, devastating rocket with long reload."
+base_sprite = 183
+top_sprite = 229
+preview_top_sprite = 206
+cost = 200
+attack_range = 256.0
+attack_cooldown = 1.5
+projectile = "big_rocket"
+ammo_slot_offsets = [[0.0, 8.0]]
+ammo_refill_secs = 4.0
+
+[projectiles.big_rocket]
+damage = 150.0
+speed = 400.0
+sprite = 252
+explosion_sprite = 21
+splash_radius = 100.0

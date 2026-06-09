@@ -13,7 +13,7 @@ use bevy_ecs_tilemap::prelude::*;
 
 use state::{GameState, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
-use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry};
+use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, cycle_tower_on_scroll, select_tower_by_key, update_dock_selection, handle_dock_slot_click};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, handle_level_select_input};
 use game_over::{setup_game_over, handle_game_over_input};
@@ -41,6 +41,7 @@ fn main() {
             spawn_tilemap,
             spawn_placement_preview,
             spawn_gold_hud,
+            setup_tower_dock,
         ).chain())
         .add_systems(OnExit(GameState::InGame), cleanup_level)
         .add_systems(FixedUpdate, (
@@ -61,6 +62,12 @@ fn main() {
             despawn_timed,
             update_gold_hud,
             tick_placement_denied,
+        ).run_if(in_state(GameState::InGame)))
+        .add_systems(Update, (
+            cycle_tower_on_scroll,
+            select_tower_by_key,
+            update_dock_selection,
+            handle_dock_slot_click,
         ).run_if(in_state(GameState::InGame)))
         // ---------- GameOver ----------
         .add_systems(OnEnter(GameState::GameOver), setup_game_over)

@@ -324,8 +324,9 @@ For each `Exploding` projectile:
 6. Despawn the projectile.
 
 See `pub fn explode_projectiles` in `src/tower.rs` for the full implementation.
+Add `launch_rockets`, `move_projectiles`, and `explode_projectiles` to the `FixedUpdate` chain in `src/main.rs` before testing.
 
-> **Run the game now.** Rocket launchers should track enemies, fire homing rockets, and deal splash damage on impact. Watch the ammo slots — each shot removes one rocket. After three shots the launcher goes silent until refill kicks in.
+> **Run the game now.** Rocket launchers should track enemies, fire homing rockets, and deal splash damage on impact. Watch the ammo slots — each shot removes one rocket. After three shots the launcher goes silent (ammo refill is the next step).
 
 ---
 
@@ -341,6 +342,7 @@ What does it query?
 For each launcher, tick the `AmmoRegenTimer`. When it fires, find the first empty slot (`None`), spawn a new rocket sprite child at the corresponding `AMMO_SLOT_OFFSET`, and store the child's `Entity` ID in the slot. The child is attached via `with_children`, so it inherits the barrel's position and rotation.
 
 See `pub fn refill_ammo` in `src/tower.rs` for the full implementation.
+Add `refill_ammo` to the `FixedUpdate` chain in `src/main.rs` as well.
 
 Now the full loop is visible: rockets deplete on fire, then slowly reappear one by one.
 
