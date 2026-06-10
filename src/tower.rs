@@ -150,6 +150,18 @@ pub struct PlacedTowers(pub HashSet<[u32; 2]>);
 #[derive(Resource)]
 pub struct SelectedTowerType(pub usize);
 
+/// Event emitted when the player successfully places a tower.
+///
+/// Carries all data the consumers need so the bookkeeping system does not
+/// need to look up the tower definition again.
+#[derive(Message)]
+pub struct PlaceTower {
+    pub tile: [u32; 2],
+    pub world_pos: Vec2,
+    pub tower_id: usize,
+    pub cost: u32,
+}
+
 pub fn setup_tower_atlas(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -409,19 +421,22 @@ fn spawn_rocket_launcher(
     });
 }
 
+/// Validates the click, checks affordability, and emits a [`PlaceTower`] event.
+///
+/// Spawning and gold deduction are handled by separate consumer systems so this
+/// input handler stays focused on input logic only.
 pub fn place_tower_on_click(
-    mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
     map_layout: Res<MapLayout>,
-    mut placed: ResMut<PlacedTowers>,
-    mut gold: ResMut<Gold>,
-    atlas: Res<TowerAtlas>,
+    placed: Res<PlacedTowers>,
+    gold: Res<Gold>,
+    preview_q: Query<Entity, With<TowerPreview>>,
+    mut commands: Commands,
+    mut place_events: MessageWriter<PlaceTower>,
     registry: Res<TowerRegistry>,
     selected: Res<SelectedTowerType>,
-    // Query preview entities so we can attach the PlacementDenied flash.
-    preview_q: Query<Entity, With<TowerPreview>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -449,17 +464,39 @@ pub fn place_tower_on_click(
         return;
     }
 
-    // Deduct the cost *before* spawning the tower so the player can't
-    // accidentally place two towers on one click (the second would fail
-    // the affordability check).
-    gold.0 -= def.cost as f32;
-    placed.0.insert(tile);
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
+    // Emit the event — spawning and gold deduction are handled by separate
+    // consumers so the input system doesn't need to know about either.
+    place_events.write(PlaceTower {
+        tile,
+        world_pos: pos,
+        tower_id: selected.0,
+        cost: def.cost,
+    });
+}
+
+/// Spawns towers from [`PlaceTower`] messages emitted by the click handler.
+pub fn spawn_tower_from_event(
+    mut events: MessageReader<PlaceTower>,
+    mut commands: Commands,
+    atlas: Res<TowerAtlas>,
+    registry: Res<TowerRegistry>,
+) {
+    let mut iter = events.read();
+    let Some(event) = iter.next() else { return; };
+    assert!(
+        iter.next().is_none(),
+        "only one tower can be placed per frame; the producer should emit at most one PlaceTower message",
+    );
+
+    let def = registry.towers.get(event.tower_id)
+        .expect("Tower type must exist in registry");
+
     if def.damage.is_some() {
-        spawn_instant_tower(&mut commands, &atlas, def, selected.0, pos);
+        spawn_instant_tower(&mut commands, &atlas, def, event.tower_id, event.world_pos);
     } else {
-        spawn_rocket_launcher(&mut commands, &atlas, def, selected.0, pos);
+        spawn_rocket_launcher(&mut commands, &atlas, def, event.tower_id, event.world_pos);
     }
 }
 

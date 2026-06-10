@@ -13,11 +13,11 @@ use bevy_ecs_tilemap::prelude::*;
 
 use state::{GameState, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
-use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, cycle_tower_on_scroll, select_tower_by_key, update_dock_selection, handle_dock_slot_click};
+use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, cycle_tower_on_scroll, select_tower_by_key, update_dock_selection, handle_dock_slot_click, PlaceTower};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, handle_level_select_input};
 use game_over::{setup_game_over, handle_game_over_input};
-use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied};
+use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied, deduct_gold_on_placement};
 
 fn main() {
     App::new()
@@ -25,6 +25,7 @@ fn main() {
         .add_plugins(TilemapPlugin)
         .init_state::<GameState>()
         .init_resource::<AvailableLevels>()
+        .add_message::<PlaceTower>()
         .add_systems(Startup, (load_tower_registry, spawn_camera, setup_tower_atlas).chain())
         // ---------- LevelSelect ----------
         .add_systems(OnEnter(GameState::LevelSelect), (
@@ -59,6 +60,8 @@ fn main() {
         .add_systems(Update, (
             update_placement_preview,
             place_tower_on_click,
+            spawn_tower_from_event.after(place_tower_on_click),
+            deduct_gold_on_placement.after(place_tower_on_click),
             despawn_timed,
             update_gold_hud,
             tick_placement_denied,

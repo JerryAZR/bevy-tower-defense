@@ -18,7 +18,7 @@
 use bevy::prelude::*;
 
 use crate::state::GameEntity;
-
+use crate::tower::{PlaceTower, PlacedTowers};
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -129,4 +129,22 @@ pub fn tick_placement_denied(
             commands.entity(entity).remove::<PlacementDenied>();
         }
     }
+}
+
+/// Deducts gold and marks the tile as occupied when a tower placement message
+/// is received.
+pub fn deduct_gold_on_placement(
+    mut events: MessageReader<PlaceTower>,
+    mut gold: ResMut<Gold>,
+    mut placed: ResMut<PlacedTowers>,
+) {
+    let mut iter = events.read();
+    let Some(event) = iter.next() else { return; };
+    assert!(
+        iter.next().is_none(),
+        "only one tower can be placed per frame; the producer should emit at most one PlaceTower message",
+    );
+
+    gold.0 -= event.cost as f32;
+    placed.0.insert(event.tile);
 }
