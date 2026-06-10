@@ -8,6 +8,7 @@ mod gameplay;
 mod level_select;
 mod game_over;
 mod economy;
+mod audio;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
@@ -18,6 +19,7 @@ use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, handle_level_select_input};
 use game_over::{setup_game_over, handle_game_over_input};
 use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied, deduct_gold_on_placement};
+use audio::{load_audio_assets, start_background_music, stop_background_music, play_sound_effects, PlaySound};
 
 fn main() {
     App::new()
@@ -26,7 +28,8 @@ fn main() {
         .init_state::<GameState>()
         .init_resource::<AvailableLevels>()
         .add_message::<PlaceTower>()
-        .add_systems(Startup, (load_tower_registry, spawn_camera, setup_tower_atlas).chain())
+        .add_message::<PlaySound>()
+        .add_systems(Startup, (load_tower_registry, load_audio_assets, spawn_camera, setup_tower_atlas).chain())
         // ---------- LevelSelect ----------
         .add_systems(OnEnter(GameState::LevelSelect), (
             scan_available_levels,
@@ -43,8 +46,9 @@ fn main() {
             spawn_placement_preview,
             spawn_gold_hud,
             setup_tower_dock,
+            start_background_music,
         ).chain())
-        .add_systems(OnExit(GameState::InGame), cleanup_level)
+        .add_systems(OnExit(GameState::InGame), (cleanup_level, stop_background_music))
         .add_systems(FixedUpdate, (
             spawn_wave_enemies,
             move_enemies,
@@ -62,6 +66,7 @@ fn main() {
             place_tower_on_click,
             spawn_tower_from_event.after(place_tower_on_click),
             deduct_gold_on_placement.after(place_tower_on_click),
+            play_sound_effects,
             despawn_timed,
             update_gold_hud,
             tick_placement_denied,

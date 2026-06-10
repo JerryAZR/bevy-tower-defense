@@ -1,6 +1,8 @@
 use bevy::prelude::*;
+use bevy::audio::Volume;
 use bevy::input::mouse::MouseWheel;
 use bevy::ecs::message::MessageReader;
+use bevy::ecs::message::MessageWriter;
 use std::collections::HashMap;
 use serde::Deserialize;
 
@@ -9,6 +11,7 @@ use crate::map::{MapLayout, TileType};
 use crate::enemy::{Enemy, Health, PathFollower};
 use crate::state::GameEntity;
 use crate::economy::{Gold, Bounty, PlacementDenied, DENIED_FLASH_DURATION};
+use crate::audio::{PlaySound, SoundType};
 
 // ---------------------------------------------------------------------------
 // tower registry — raw TOML representation
@@ -512,6 +515,7 @@ pub fn attack_enemies(
     // Include Bounty so we can reward the player on kill.
     mut enemies: Query<(Entity, &Transform, &mut Health, &Bounty), (With<Enemy>, With<PathFollower>, Without<InstantShooter>)>,
     mut commands: Commands,
+    mut sounds: MessageWriter<PlaySound>,
 ) {
     // Snapshot enemy positions, then release the query borrow.
     let enemy_positions: Vec<(Entity, Vec2)> = enemies
@@ -543,6 +547,8 @@ pub fn attack_enemies(
             turret_transform.rotation = Quat::from_rotation_z(angle);
 
             if attacker.timer.just_finished() {
+                sounds.write(PlaySound { sound: SoundType::LaserFire, volume: 1.0 });
+
                 // Deal damage and collect bounty if the enemy dies.
                 if let Ok((entity, _, mut health, bounty)) = enemies.get_mut(target) {
                     if health.0 > 0.0 {
@@ -639,6 +645,7 @@ pub fn launch_rockets(
     enemies: Query<(Entity, &Transform), (With<Enemy>, With<PathFollower>, Without<AmmoState>)>,
     slot_transforms: Query<&GlobalTransform>,
     mut commands: Commands,
+    audio_assets: Res<crate::audio::AudioAssets>,
     registry: Res<TowerRegistry>,
 ) {
     let enemy_positions: Vec<(Entity, Vec2)> = enemies
@@ -704,6 +711,8 @@ pub fn launch_rockets(
                             TextureAtlas { layout: atlas.layout.clone(), index: proj_def.sprite },
                         ),
                         Transform::from_xyz(spawn_pos.x, spawn_pos.y, 2.3),
+                        AudioPlayer::new(audio_assets.rocket_launch.clone()),
+                        PlaybackSettings::LOOP.with_volume(Volume::Linear(2.0)),
                     ));
                 }
             }
@@ -752,8 +761,10 @@ pub fn explode_projectiles(
     mut gold: ResMut<Gold>,
     projectiles: Query<(Entity, &Transform, &Projectile), (With<Exploding>, Without<Enemy>)>,
     mut enemies: Query<(Entity, &Transform, &mut Health, &Bounty), (With<Enemy>, Without<Exploding>)>,
+    mut sounds: MessageWriter<PlaySound>,
 ) {
     for (proj_entity, proj_transform, projectile) in projectiles.iter() {
+        sounds.write(PlaySound { sound: SoundType::RocketExplosion, volume: 0.8 });
         let pos = proj_transform.translation.truncate();
 
         for (enemy_entity, enemy_transform, mut health, bounty) in enemies.iter_mut() {
