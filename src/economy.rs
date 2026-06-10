@@ -18,7 +18,7 @@
 use bevy::prelude::*;
 
 use crate::state::GameEntity;
-use crate::tower::{PlaceTower, PlacedTowers};
+use crate::tower::PlaceTower;
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -131,12 +131,10 @@ pub fn tick_placement_denied(
     }
 }
 
-/// Deducts gold and marks the tile as occupied when a tower placement message
-/// is received.
+/// Deducts gold when a tower placement message is received.
 pub fn deduct_gold_on_placement(
     mut events: MessageReader<PlaceTower>,
     mut gold: ResMut<Gold>,
-    mut placed: ResMut<PlacedTowers>,
 ) {
     let mut iter = events.read();
     let Some(event) = iter.next() else { return; };
@@ -146,5 +144,4 @@ pub fn deduct_gold_on_placement(
     );
 
     gold.0 -= event.cost as f32;
-    placed.0.insert(event.tile);
 }

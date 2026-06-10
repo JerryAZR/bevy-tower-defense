@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::input::mouse::MouseWheel;
 use bevy::ecs::message::MessageReader;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::enemy::tile_to_world;
@@ -145,7 +145,7 @@ pub struct TowerAtlas {
 }
 
 #[derive(Resource, Default)]
-pub struct PlacedTowers(pub HashSet<[u32; 2]>);
+pub struct PlacedTowers(pub HashMap<[u32; 2], Entity>);
 
 #[derive(Resource)]
 pub struct SelectedTowerType(pub usize);
@@ -232,7 +232,7 @@ fn hovered_placeable_tile(
         .and_then(|world| world_to_tile(world, map_layout.width, map_layout.height))?;
 
     let is_grass = map_layout.get(tile[0], tile[1]) == Some(TileType::Grass);
-    if is_grass && !placed.0.contains(&tile) {
+    if is_grass && !placed.0.contains_key(&tile) {
         Some(tile)
     } else {
         None
@@ -334,7 +334,7 @@ fn spawn_instant_tower(
     def: &TowerDefinition,
     tower_id: usize,
     pos: Vec2,
-) {
+) -> Entity {
     commands.spawn((
         GameEntity,
         Sprite::from_atlas_image(
@@ -360,7 +360,7 @@ fn spawn_instant_tower(
             damage: def.damage.expect("instant tower must have damage"),
             muzzle_flash_sprite: def.muzzle_flash_sprite.expect("instant tower must have muzzle_flash_sprite"),
         },
-    ));
+    )).id()
 }
 /// Spawns a rocket launcher tower (base + barrel + ammo slots).
 /// Reads all stats from the tower definition.
@@ -370,7 +370,7 @@ fn spawn_rocket_launcher(
     def: &TowerDefinition,
     tower_id: usize,
     pos: Vec2,
-) {
+) -> Entity {
     commands.spawn((
         GameEntity,
         Sprite::from_atlas_image(
@@ -419,7 +419,9 @@ fn spawn_rocket_launcher(
         regen: Timer::from_seconds(ammo_refill, TimerMode::Repeating),
         slots: slot_entities,
     });
+    turret_entity
 }
+
 
 /// Validates the click, checks affordability, and emits a [`PlaceTower`] event.
 ///
@@ -482,6 +484,7 @@ pub fn spawn_tower_from_event(
     mut commands: Commands,
     atlas: Res<TowerAtlas>,
     registry: Res<TowerRegistry>,
+    mut placed: ResMut<PlacedTowers>,
 ) {
     let mut iter = events.read();
     let Some(event) = iter.next() else { return; };
@@ -493,11 +496,12 @@ pub fn spawn_tower_from_event(
     let def = registry.towers.get(event.tower_id)
         .expect("Tower type must exist in registry");
 
-    if def.damage.is_some() {
-        spawn_instant_tower(&mut commands, &atlas, def, event.tower_id, event.world_pos);
+    let tower_entity = if def.damage.is_some() {
+        spawn_instant_tower(&mut commands, &atlas, def, event.tower_id, event.world_pos)
     } else {
-        spawn_rocket_launcher(&mut commands, &atlas, def, event.tower_id, event.world_pos);
-    }
+        spawn_rocket_launcher(&mut commands, &atlas, def, event.tower_id, event.world_pos)
+    };
+    placed.0.insert(event.tile, tower_entity);
 }
 
 pub fn attack_enemies(
@@ -776,6 +780,59 @@ pub fn explode_projectiles(
         ));
 
         commands.entity(proj_entity).despawn();
+    }
+}
+// ---------------------------------------------------------------------------
+// gizmos — tower range visualization
+// ---------------------------------------------------------------------------
+
+/// Draws attack-range circles for the placement preview and for any placed
+/// tower currently under the mouse cursor.
+pub fn draw_tower_ranges(
+    mut gizmos: Gizmos,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    placed: Res<PlacedTowers>,
+    towers: Query<(&Transform, &TowerAttacker)>,
+    preview: Query<(&Transform, &Visibility), With<TowerPreview>>,
+    selected: Res<SelectedTowerType>,
+    registry: Res<TowerRegistry>,
+    map_layout: Res<MapLayout>,
+) {
+    let (cam, cam_transform) = *camera;
+    let cursor_world = window
+        .cursor_position()
+        .and_then(|cursor| cam.viewport_to_world_2d(cam_transform, cursor).ok());
+
+    // Draw a range ring for the placed tower on the tile under the cursor.
+    if let Some(cursor_pos) = cursor_world {
+        if let Some(tile) = world_to_tile(cursor_pos, map_layout.width, map_layout.height) {
+            if let Some(&entity) = placed.0.get(&tile) {
+                if let Ok((transform, attacker)) = towers.get(entity) {
+                    let tower_pos = transform.translation.truncate();
+                    gizmos.circle_2d(
+                        tower_pos,
+                        attacker.range,
+                        Color::srgba(1.0, 1.0, 1.0, 0.5),
+                    );
+                }
+            }
+        }
+    }
+
+    // Draw a range ring for the placement preview only when it is visible.
+    for (preview_transform, visibility) in preview.iter() {
+        if *visibility != Visibility::Visible {
+            continue;
+        }
+        let def = registry.towers.get(selected.0)
+            .expect("Selected tower index must be in registry");
+        let preview_pos = preview_transform.translation.truncate();
+        gizmos.circle_2d(
+            preview_pos,
+            def.attack_range,
+            Color::srgba(1.0, 0.84, 0.0, 0.4),
+        );
     }
 }
 // ---------------------------------------------------------------------------
