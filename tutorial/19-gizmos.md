@@ -144,6 +144,9 @@ pub fn deduct_gold_on_placement(
     // placed.0.insert removed — handled by spawn_tower_from_event
 }
 ```
+
+> **Run the game now.** Tower placement and gold deduction should work exactly as before the refactor — the `PlacedTowers` change is internal only. If anything is broken, fix it before moving on; the gizmo system below depends on the new `HashMap` representation.
+
 ### The gizmo system
 
 `draw_tower_ranges` does two things each frame:

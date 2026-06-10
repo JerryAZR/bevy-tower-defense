@@ -117,6 +117,8 @@ pub struct PlaySound {
 }
 ```
 
+> **Full path vs. prelude import:** The derives above use the full path `bevy::ecs::message::Message` so the code is self-contained. Part 18's `PlaceTower` imports `Message` from the prelude and writes `#[derive(Message)]` instead. Both forms are equivalent — use whichever keeps the file cleaner.
+
 #### 4. The four systems
 
 **Loading** — called during startup alongside sprite atlas loading:
