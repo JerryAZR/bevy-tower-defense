@@ -226,25 +226,10 @@ pub fn load_tower_registry(mut commands: Commands) {
 #[derive(Resource, Default)]
 pub struct VirtualCursorPos(pub Option<[u32; 2]>);
 
-/// Returns the tile under the cursor if it is an unoccupied grass tile.
-fn hovered_placeable_tile(
-    window: &Window,
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-    map_layout: &MapLayout,
-    placed: &PlacedTowers,
-) -> Option<[u32; 2]> {
-    let tile = window
-        .cursor_position()
-        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
-        .and_then(|world| world_to_tile(world, map_layout.width, map_layout.height))?;
-
-    let is_grass = map_layout.get(tile[0], tile[1]) == Some(TileType::Grass);
-    if is_grass && !placed.0.contains_key(&tile) {
-        Some(tile)
-    } else {
-        None
-    }
+/// Returns `true` if the tile is grass and not already occupied by a tower.
+fn tile_is_placeable(tile: [u32; 2], map_layout: &MapLayout, placed: &PlacedTowers) -> bool {
+    map_layout.get(tile[0], tile[1]) == Some(TileType::Grass)
+        && !placed.0.contains_key(&tile)
 }
 
 pub fn spawn_placement_preview(
@@ -286,27 +271,22 @@ pub fn spawn_placement_preview(
     ));
 }
 pub fn update_placement_preview(
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    cursor: Res<VirtualCursorPos>,
     map_layout: Res<MapLayout>,
     placed: Res<PlacedTowers>,
     gold: Res<Gold>,
     registry: Res<TowerRegistry>,
     selected: Res<SelectedTowerType>,
-    // We need &mut Sprite to tint the preview red on denied placement.
-    // Option<&PlacementDenied> tells us whether the flash is active.
     mut preview_q: Query<(&mut Transform, &mut Visibility, &mut Sprite, Option<&PlacementDenied>), With<TowerPreview>>,
 ) {
-    let (cam, cam_transform) = *camera;
-
-    let Some(tile) = hovered_placeable_tile(
-        &window, &cam, &cam_transform, &map_layout, &placed,
-    ) else {
+    let Some(tile) = cursor.0 else {
         for (_, mut vis, ..) in preview_q.iter_mut() {
             *vis = Visibility::Hidden;
         }
         return;
     };
+
+    let can_place = tile_is_placeable(tile, &map_layout, &placed);
 
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
@@ -318,7 +298,6 @@ pub fn update_placement_preview(
     assert_eq!(previews.len(), 2, "placement preview must have exactly 2 entities");
     previews.sort_by(|a, b| a.0.translation.z.total_cmp(&b.0.translation.z));
 
-    // Lower z = base sprite, higher z = top preview sprite.
     previews[0].2.texture_atlas.as_mut().unwrap().index = def.base_sprite;
     previews[1].2.texture_atlas.as_mut().unwrap().index = def.preview_top_sprite;
 
@@ -328,13 +307,10 @@ pub fn update_placement_preview(
         *vis = Visibility::Visible;
 
         if denied.is_some() {
-            // Red flash — the player just tried to place a tower they can't afford.
             sprite.color = Color::srgba(1.0, 0.3, 0.3, 0.5);
-        } else if can_afford {
-            // Green tint to signal "you can place here."
+        } else if can_place && can_afford {
             sprite.color = Color::srgba(0.3, 1.0, 0.3, 0.5);
         } else {
-            // White/neutral — tile is valid but player lacks gold.
             sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.5);
         }
     }
@@ -440,11 +416,9 @@ fn spawn_rocket_launcher(
 /// Validates the click, checks affordability, and emits a [`PlaceTower`] event.
 ///
 /// Spawning and gold deduction are handled by separate consumer systems so this
-/// input handler stays focused on input logic only.
 pub fn place_tower_on_click(
-    mouse: Res<ButtonInput<MouseButton>>,
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    mut actions: MessageReader<GameAction>,
+    cursor: Res<VirtualCursorPos>,
     map_layout: Res<MapLayout>,
     placed: Res<PlacedTowers>,
     gold: Res<Gold>,
@@ -454,23 +428,17 @@ pub fn place_tower_on_click(
     registry: Res<TowerRegistry>,
     selected: Res<SelectedTowerType>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !actions.read().any(|a| matches!(a, GameAction::Confirm)) {
         return;
     }
 
-    let (cam, cam_transform) = *camera;
+    let Some(tile) = cursor.0 else { return; };
 
-    let Some(tile) = hovered_placeable_tile(
-        &window, &cam, &cam_transform, &map_layout, &placed,
-    ) else {
-        return;
-    };
+    if !tile_is_placeable(tile, &map_layout, &placed) { return; }
 
     let def = registry.towers.get(selected.0)
         .expect("Selected tower index must be in registry");
 
-    // Check affordability — if the player can't pay, flash the preview red
-    // instead of silently ignoring the click.
     if gold.0 < def.cost as f32 {
         for preview_entity in preview_q.iter() {
             commands.entity(preview_entity).insert(PlacementDenied(
@@ -481,9 +449,6 @@ pub fn place_tower_on_click(
     }
 
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
-
-    // Emit the event — spawning and gold deduction are handled by separate
-    // consumers so the input system doesn't need to know about either.
     place_events.write(PlaceTower {
         tile,
         world_pos: pos,
@@ -812,32 +777,23 @@ pub fn explode_projectiles(
 /// tower currently under the mouse cursor.
 pub fn draw_tower_ranges(
     mut gizmos: Gizmos,
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    cursor: Res<VirtualCursorPos>,
     placed: Res<PlacedTowers>,
     towers: Query<(&Transform, &TowerAttacker)>,
     preview: Query<(&Transform, &Visibility), With<TowerPreview>>,
     selected: Res<SelectedTowerType>,
     registry: Res<TowerRegistry>,
-    map_layout: Res<MapLayout>,
 ) {
-    let (cam, cam_transform) = *camera;
-    let cursor_world = window
-        .cursor_position()
-        .and_then(|cursor| cam.viewport_to_world_2d(cam_transform, cursor).ok());
-
-    // Draw a range ring for the placed tower on the tile under the cursor.
-    if let Some(cursor_pos) = cursor_world {
-        if let Some(tile) = world_to_tile(cursor_pos, map_layout.width, map_layout.height) {
-            if let Some(&entity) = placed.0.get(&tile) {
-                if let Ok((transform, attacker)) = towers.get(entity) {
-                    let tower_pos = transform.translation.truncate();
-                    gizmos.circle_2d(
-                        tower_pos,
-                        attacker.range,
-                        Color::srgba(1.0, 1.0, 1.0, 0.5),
-                    );
-                }
+    // Draw a range ring for the placed tower at the cursor tile.
+    if let Some(tile) = cursor.0 {
+        if let Some(&entity) = placed.0.get(&tile) {
+            if let Ok((transform, attacker)) = towers.get(entity) {
+                let tower_pos = transform.translation.truncate();
+                gizmos.circle_2d(
+                    tower_pos,
+                    attacker.range,
+                    Color::srgba(1.0, 1.0, 1.0, 0.5),
+                );
             }
         }
     }
