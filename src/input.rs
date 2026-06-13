@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use bevy::ecs::message::MessageWriter;
 use bevy::input::mouse::MouseWheel;
-use bevy::ecs::message::MessageReader;
+use bevy::window::CursorMoved;
 use crate::state::GameState;
-
+use crate::map::MapLayout;
+use crate::tower::{VirtualCursorPos, world_to_tile};
 // ---------------------------------------------------------------------------
 // action event — logical input, decoupled from physical devices
 // ---------------------------------------------------------------------------
@@ -118,8 +119,57 @@ fn read_mouse_for_actions(
 }
 
 // ---------------------------------------------------------------------------
-// plugin
+// mouse cursor → VirtualCursorPos ("virtual cursor")
 // ---------------------------------------------------------------------------
+
+/// Updates `VirtualCursorPos` from the mouse cursor position every frame
+/// during `InGame`.  Gameplay systems read this resource instead of
+/// querying the cursor directly.
+fn read_mouse_hover(
+    camera: Single<(&Camera, &GlobalTransform)>,
+    map_layout: Res<MapLayout>,
+    mut kb_pos: ResMut<VirtualCursorPos>,
+    mut cursor_events: MessageReader<CursorMoved>,
+) {
+    // Only process the last cursor-move event of the frame.
+    let Some(event) = cursor_events.read().last() else { return; };
+
+    let (cam, cam_transform) = *camera;
+    let Ok(world) = cam.viewport_to_world_2d(cam_transform, event.position) else {
+        return;
+    };
+    if let Some(tile) = world_to_tile(world, map_layout.width, map_layout.height) {
+        kb_pos.0 = Some(tile);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mouse click → GameAction::Confirm
+// ---------------------------------------------------------------------------
+
+/// Left-click during `InGame` emits a `Confirm` action, but only when the
+/// cursor is on a map tile.
+fn read_mouse_click(
+    mouse: Res<ButtonInput<MouseButton>>,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    map_layout: Res<MapLayout>,
+    mut actions: MessageWriter<GameAction>,
+) {
+    if !mouse.just_pressed(MouseButton::Left) { return; }
+
+    let (cam, cam_transform) = *camera;
+    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok(world) = cam.viewport_to_world_2d(cam_transform, cursor) else {
+        return;
+    };
+    if world_to_tile(world, map_layout.width, map_layout.height).is_some() {
+        actions.write(GameAction::Confirm);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// plugin
 
 pub struct InputPlugin;
 
@@ -127,6 +177,8 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_message::<GameAction>()
-            .add_systems(Update, (read_keyboard_for_actions, read_mouse_for_actions));
+            .add_systems(Update, (read_keyboard_for_actions, read_mouse_for_actions))
+            .add_systems(Update, read_mouse_hover.run_if(in_state(GameState::InGame)))
+            .add_systems(Update, read_mouse_click.run_if(in_state(GameState::InGame)));
     }
 }

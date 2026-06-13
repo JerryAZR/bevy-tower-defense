@@ -220,6 +220,12 @@ pub fn load_tower_registry(mut commands: Commands) {
 
 }
 
+/// Virtual cursor — the tile coordinate shared by mouse, keyboard, and
+/// gamepad.  `read_mouse_hover` writes this every frame; gameplay systems
+/// read it instead of querying the cursor directly.
+#[derive(Resource, Default)]
+pub struct VirtualCursorPos(pub Option<[u32; 2]>);
+
 /// Returns the tile under the cursor if it is an unoccupied grass tile.
 fn hovered_placeable_tile(
     window: &Window,
@@ -246,7 +252,13 @@ pub fn spawn_placement_preview(
     atlas: Res<TowerAtlas>,
     registry: Res<TowerRegistry>,
     selected: Res<SelectedTowerType>,
+    map_layout: Res<MapLayout>,
 ) {
+    commands.insert_resource(VirtualCursorPos(Some([
+        map_layout.width / 2,
+        map_layout.height / 2,
+    ])));
+
     let tinted = |index: usize| Sprite {
         color: Color::srgba(1.0, 1.0, 1.0, 0.5),
         ..Sprite::from_atlas_image(
@@ -1005,7 +1017,7 @@ pub fn select_tower_by_key(
     }
 }
 
-fn world_to_tile(world: Vec2, map_width: u32, map_height: u32) -> Option<[u32; 2]> {
+pub fn world_to_tile(world: Vec2, map_width: u32, map_height: u32) -> Option<[u32; 2]> {
     let tile_size = 64.0;
     let origin_x = -(map_width as f32) * tile_size / 2.0 + tile_size / 2.0;
     let origin_y = -(map_height as f32) * tile_size / 2.0 + tile_size / 2.0;
