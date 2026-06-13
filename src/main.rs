@@ -16,7 +16,7 @@ use bevy_ecs_tilemap::prelude::*;
 
 use state::{GameState, GameplaySet, game_is_running, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
-use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, select_tower_by_key, update_dock_selection, handle_dock_slot_click, draw_tower_ranges, PlaceTower};
+use tower::{setup_tower_atlas, spawn_placement_preview, nudge_virtual_cursor, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, select_tower_by_key, update_dock_selection, handle_dock_slot_click, draw_cursor_highlight, draw_tower_ranges, PlaceTower};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, navigate_level_select, update_level_select_visuals, handle_level_button_click};
 use game_over::{setup_game_over, handle_game_over_input};
@@ -75,6 +75,7 @@ fn main() {
             earn_passive_income,
         ).chain().in_set(GameplaySet::Simulation))
         .add_systems(Update, (
+            nudge_virtual_cursor,
             update_placement_preview,
             place_tower_on_click,
             spawn_tower_from_event.after(place_tower_on_click),
@@ -82,6 +83,7 @@ fn main() {
             despawn_timed,
             update_gold_hud,
             tick_placement_denied,
+            draw_cursor_highlight,
             draw_tower_ranges,
         ).in_set(GameplaySet::Interaction))
         .add_systems(Update, (

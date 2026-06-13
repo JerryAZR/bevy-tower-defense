@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::audio::Volume;
+use bevy::math::Isometry2d;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::message::MessageWriter;
 use std::collections::HashMap;
@@ -232,6 +233,29 @@ fn tile_is_placeable(tile: [u32; 2], map_layout: &MapLayout, placed: &PlacedTowe
         && !placed.0.contains_key(&tile)
 }
 
+/// Moves `VirtualCursorPos` one tile when an arrow-key `GameAction` fires.
+/// Clamped to map bounds; tile validity is checked later by
+/// `update_placement_preview` and `place_tower_on_click`.
+pub fn nudge_virtual_cursor(
+    mut actions: MessageReader<GameAction>,
+    map_layout: Res<MapLayout>,
+    mut cursor: ResMut<VirtualCursorPos>,
+) {
+    let direction: Option<[i32; 2]> = actions.read().find_map(|a| match a {
+        GameAction::Up    => Some([0, 1]),
+        GameAction::Down  => Some([0, -1]),
+        GameAction::Left  => Some([-1, 0]),
+        GameAction::Right => Some([1, 0]),
+        _ => None,
+    });
+    let Some([dx, dy]) = direction else { return; };
+
+    let current = cursor.0.unwrap_or([map_layout.width / 2, map_layout.height / 2]);
+    let nx = (current[0] as i32 + dx).clamp(0, map_layout.width as i32 - 1) as u32;
+    let ny = (current[1] as i32 + dy).clamp(0, map_layout.height as i32 - 1) as u32;
+    cursor.0 = Some([nx, ny]);
+}
+
 pub fn spawn_placement_preview(
     mut commands: Commands,
     atlas: Res<TowerAtlas>,
@@ -288,6 +312,14 @@ pub fn update_placement_preview(
 
     let can_place = tile_is_placeable(tile, &map_layout, &placed);
 
+    // Hide the preview if the tile is not placeable (path, occupied, etc.).
+    if !can_place {
+        for (_, mut vis, ..) in preview_q.iter_mut() {
+            *vis = Visibility::Hidden;
+        }
+        return;
+    }
+
     let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
 
     let def = registry.towers.get(selected.0)
@@ -308,7 +340,7 @@ pub fn update_placement_preview(
 
         if denied.is_some() {
             sprite.color = Color::srgba(1.0, 0.3, 0.3, 0.5);
-        } else if can_place && can_afford {
+        } else if can_afford {
             sprite.color = Color::srgba(0.3, 1.0, 0.3, 0.5);
         } else {
             sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.5);
@@ -772,6 +804,22 @@ pub fn explode_projectiles(
 // ---------------------------------------------------------------------------
 // gizmos — tower range visualization
 // ---------------------------------------------------------------------------
+
+/// Highlights the tile under the virtual cursor.
+pub fn draw_cursor_highlight(
+    mut gizmos: Gizmos,
+    cursor: Res<VirtualCursorPos>,
+    map_layout: Res<MapLayout>,
+) {
+    if let Some(tile) = cursor.0 {
+        let pos = tile_to_world(tile, map_layout.width as f32, map_layout.height as f32);
+        gizmos.rect_2d(
+            Isometry2d::from_translation(pos),
+            Vec2::splat(64.0),
+            Color::srgba(1.0, 1.0, 1.0, 0.3),
+        );
+    }
+}
 
 /// Draws attack-range circles for the placement preview and for any placed
 /// tower currently under the mouse cursor.
