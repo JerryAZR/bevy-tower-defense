@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::ecs::message::MessageWriter;
 use bevy::input::mouse::MouseWheel;
+use bevy::input::gamepad::Gamepad;
 use bevy::window::CursorMoved;
 use crate::state::GameState;
 use crate::map::MapLayout;
@@ -169,7 +170,89 @@ fn read_mouse_click(
 }
 
 // ---------------------------------------------------------------------------
+// gamepad → GameAction
+// ---------------------------------------------------------------------------
+
+/// Reads gamepad buttons and emits `GameAction` events.  `South` (A) is
+/// Confirm, `East` (B) and `Start` are Cancel, the D-pad navigates.
+fn read_gamepad(
+    gamepads: Query<&Gamepad>,
+    mut actions: MessageWriter<GameAction>,
+) {
+    for gamepad in gamepads.iter() {
+        let btn = gamepad.digital();
+        if btn.just_pressed(GamepadButton::DPadUp)    { actions.write(GameAction::Up); }
+        if btn.just_pressed(GamepadButton::DPadDown)  { actions.write(GameAction::Down); }
+        if btn.just_pressed(GamepadButton::DPadLeft)  { actions.write(GameAction::Left); }
+        if btn.just_pressed(GamepadButton::DPadRight) { actions.write(GameAction::Right); }
+        if btn.just_pressed(GamepadButton::South) {
+            actions.write(GameAction::Confirm);
+        }
+        if btn.just_pressed(GamepadButton::East) {
+            actions.write(GameAction::Cancel);
+        }
+        if btn.just_pressed(GamepadButton::Start) {
+            actions.write(GameAction::Cancel);
+        }
+        if btn.just_pressed(GamepadButton::LeftTrigger) {
+            actions.write(GameAction::PrevTower);
+        }
+        if btn.just_pressed(GamepadButton::RightTrigger) {
+            actions.write(GameAction::NextTower);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// gamepad left stick → GameAction (directional)
+// ---------------------------------------------------------------------------
+
+/// Reads the left joystick of connected gamepads and emits directional
+/// `GameAction` events at a throttled rate.  A dead zone prevents drift;
+/// the dominant axis (largest absolute value) wins each frame to avoid
+/// diagonal movement.
+fn read_gamepad_stick(
+    gamepads: Query<&Gamepad>,
+    mut actions: MessageWriter<GameAction>,
+    mut timer: Local<Timer>,
+    mut was_idle: Local<bool>,
+    time: Res<Time>,
+) {
+    // Initialise the repeating timer once (150 ms per tile step).
+    if timer.duration().is_zero() {
+        *timer = Timer::from_seconds(0.15, TimerMode::Repeating);
+        *was_idle = true;
+    }
+
+    for gamepad in gamepads.iter() {
+        let stick = gamepad.left_stick();
+        if stick.length() < 0.3 {
+            // Stick released — next push will fire immediately.
+            *was_idle = true;
+            return;
+        }
+
+        timer.tick(time.delta());
+        if !*was_idle && !timer.just_finished() {
+            return;
+        }
+
+        *was_idle = false;
+        timer.reset();
+
+        // Pick the dominant axis to emit a single cardinal direction.
+        let action = if stick.x.abs() > stick.y.abs() {
+            if stick.x > 0.0 { GameAction::Right } else { GameAction::Left }
+        } else {
+            if stick.y > 0.0 { GameAction::Up } else { GameAction::Down }
+        };
+        actions.write(action);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // plugin
+// ---------------------------------------------------------------------------
 
 pub struct InputPlugin;
 
@@ -178,7 +261,7 @@ impl Plugin for InputPlugin {
         app
             .add_message::<GameAction>()
             .add_systems(Update, (read_keyboard_for_actions, read_mouse_wheel))
-            .add_systems(Update, read_mouse_hover.run_if(in_state(GameState::InGame)))
-            .add_systems(Update, read_mouse_click.run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (read_mouse_hover, read_mouse_click).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (read_gamepad, read_gamepad_stick));
     }
 }
