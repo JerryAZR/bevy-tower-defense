@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
 use crate::state::{GameState, GameResult, ScreenUi};
+use crate::input::GameAction;
+use bevy::ecs::message::MessageReader;
 
 pub fn setup_game_over(
     mut commands: Commands,
@@ -34,7 +36,7 @@ pub fn setup_game_over(
                 TextColor(Color::WHITE),
             ));
             parent.spawn((
-                Text::new("Press Space to continue"),
+                Text::new("Press Space / Enter / Escape to continue"),
                 TextFont {
                     font_size: 24.0,
                     ..default()
@@ -45,10 +47,16 @@ pub fn setup_game_over(
 }
 
 pub fn handle_game_over_input(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut actions: MessageReader<GameAction>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
-    if keys.just_pressed(KeyCode::Space) {
-        next_state.set(GameState::LevelSelect);
+    for action in actions.read() {
+        match action {
+            GameAction::Confirm | GameAction::Cancel => {
+                next_state.set(GameState::LevelSelect);
+                return;
+            }
+            _ => {}
+        }
     }
 }

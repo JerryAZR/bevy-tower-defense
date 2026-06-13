@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 
 use crate::state::{GameState, ScreenUi, AvailableLevels, SelectedLevel};
-
+use crate::input::GameAction;
+use bevy::ecs::message::MessageReader;
 // ---------------------------------------------------------------------------
 // grid layout constants
 // ---------------------------------------------------------------------------
@@ -127,10 +128,10 @@ pub fn setup_level_select(mut commands: Commands, levels: Res<AvailableLevels>) 
 
 /// Keyboard navigation of the level select grid.
 ///
-/// Arrow keys move the focus highlight.  Enter / Space selects the focused
-/// level.  Number keys 1–9 jump directly and confirm in one step.
+/// Consumes `GameAction` events instead of reading `ButtonInput<KeyCode>`
+/// directly — the keyboard mapping lives in `read_keyboard_for_actions`.
 pub fn navigate_level_select(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut actions: MessageReader<GameAction>,
     levels: Res<AvailableLevels>,
     mut focused: ResMut<FocusedLevel>,
     mut selected: ResMut<SelectedLevel>,
@@ -141,52 +142,27 @@ pub fn navigate_level_select(
         return;
     }
 
+    let Some(action) = actions.read().next() else { return; };
+
     let row = focused.0 / COLS;
     let col = focused.0 % COLS;
     let total_rows = (len + COLS - 1) / COLS;
 
-    // --- arrow navigation ---
-    if keys.just_pressed(KeyCode::ArrowUp) && row > 0 {
-        focused.0 = focused.0.saturating_sub(COLS);
-    }
-    if keys.just_pressed(KeyCode::ArrowDown) && row + 1 < total_rows {
-        focused.0 = (focused.0 + COLS).min(len - 1);
-    }
-    if keys.just_pressed(KeyCode::ArrowLeft) && col > 0 {
-        focused.0 -= 1;
-    }
-    if keys.just_pressed(KeyCode::ArrowRight) && col + 1 < COLS && focused.0 + 1 < len {
-        focused.0 += 1;
-    }
-
-    // --- confirm (Enter / Space) ---
-    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) {
-        selected.0 = levels.0[focused.0].clone();
-        next_state.set(GameState::InGame);
-        return;
-    }
-
-    // --- number key shortcuts (1–9) ---
-    for i in 0..len.min(9) {
-        #[rustfmt::skip]
-        let key = match i {
-            0 => KeyCode::Digit1,
-            1 => KeyCode::Digit2,
-            2 => KeyCode::Digit3,
-            3 => KeyCode::Digit4,
-            4 => KeyCode::Digit5,
-            5 => KeyCode::Digit6,
-            6 => KeyCode::Digit7,
-            7 => KeyCode::Digit8,
-            8 => KeyCode::Digit9,
-            _ => continue,
-        };
-        if keys.just_pressed(key) {
-            focused.0 = i;
-            selected.0 = levels.0[i].clone();
+    match action {
+        GameAction::Up if row > 0 => focused.0 = focused.0.saturating_sub(COLS),
+        GameAction::Down if row + 1 < total_rows => focused.0 = (focused.0 + COLS).min(len - 1),
+        GameAction::Left if col > 0 => focused.0 -= 1,
+        GameAction::Right if col + 1 < COLS && focused.0 + 1 < len => focused.0 += 1,
+        GameAction::SelectLevel(i) if *i < len => {
+            focused.0 = *i;
+            selected.0 = levels.0[*i].clone();
             next_state.set(GameState::InGame);
-            return;
         }
+        GameAction::Confirm => {
+            selected.0 = levels.0[focused.0].clone();
+            next_state.set(GameState::InGame);
+        }
+        _ => {}
     }
 }
 

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use crate::state::{GameState, PauseState, GameFinished};
-
+use crate::input::GameAction;
+use bevy::ecs::message::MessageReader;
 // ---------------------------------------------------------------------------
 // marker component for the pause overlay entities
 // ---------------------------------------------------------------------------
@@ -13,13 +14,14 @@ struct PauseOverlay;
 // ---------------------------------------------------------------------------
 
 fn toggle_pause(
+    mut actions: MessageReader<GameAction>,
     game_state: Res<State<GameState>>,
     pause_state: Res<State<PauseState>>,
     game_finished: Option<Res<GameFinished>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
     mut next_pause: ResMut<NextState<PauseState>>,
 ) {
-    if !keyboard.just_pressed(KeyCode::Escape) {
+    // Only react to Cancel actions (Escape key, gamepad B/Start)
+    if !actions.read().any(|a| matches!(a, GameAction::Cancel)) {
         return;
     }
     // Only toggle when the player is actually in a level

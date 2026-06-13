@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy::audio::Volume;
-use bevy::input::mouse::MouseWheel;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::message::MessageWriter;
 use std::collections::HashMap;
@@ -12,7 +11,7 @@ use crate::enemy::{Enemy, Health, PathFollower};
 use crate::state::GameEntity;
 use crate::economy::{Gold, Bounty, PlacementDenied, DENIED_FLASH_DURATION};
 use crate::audio::{PlaySound, SoundType};
-
+use crate::input::GameAction;
 // ---------------------------------------------------------------------------
 // tower registry — raw TOML representation
 // ---------------------------------------------------------------------------
@@ -984,10 +983,11 @@ pub fn handle_dock_slot_click(
     }
 }
 
-/// Cycles the selected tower on mouse-wheel scroll.
-/// Only the first scroll event each frame is processed — one step per tick.
-pub fn cycle_tower_on_scroll(
-    mut scroll: MessageReader<MouseWheel>,
+/// Reads `GameAction` events for tower dock selection.
+/// Handles number-key shortcuts (`SelectTower`) and scroll-based
+/// next/previous (`NextTower` / `PrevTower`).
+pub fn select_tower_by_key(
+    mut actions: MessageReader<GameAction>,
     registry: Res<TowerRegistry>,
     mut selected: ResMut<SelectedTowerType>,
 ) {
@@ -995,33 +995,12 @@ pub fn cycle_tower_on_scroll(
     if len == 0 {
         return;
     }
-    let Some(ev) = scroll.read().next() else {
-        return;
-    };
-    if ev.y < 0.0 && selected.0 + 1 < len {
-        selected.0 += 1;
-    } else if ev.y > 0.0 && selected.0 > 0 {
-        selected.0 -= 1;
-    }
-}
-
-/// Selects a tower directly via number keys (1–5).
-/// Keys map to towers in registry order.
-pub fn select_tower_by_key(
-    kb: Res<ButtonInput<KeyCode>>,
-    registry: Res<TowerRegistry>,
-    mut selected: ResMut<SelectedTowerType>,
-) {
-    let keycodes = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-    ];
-    for (i, keycode) in keycodes.iter().enumerate() {
-        if i < registry.towers.len() && kb.just_pressed(*keycode) {
-            selected.0 = i;
+    for action in actions.read() {
+        match action {
+            GameAction::SelectTower(i) if *i < len => selected.0 = *i,
+            GameAction::NextTower if selected.0 + 1 < len => selected.0 += 1,
+            GameAction::PrevTower if selected.0 > 0 => selected.0 -= 1,
+            _ => {}
         }
     }
 }

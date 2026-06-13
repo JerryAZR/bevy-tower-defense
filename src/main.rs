@@ -10,18 +10,20 @@ mod game_over;
 mod economy;
 mod audio;
 mod pause;
+mod input;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
 use state::{GameState, GameplaySet, game_is_running, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
-use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, cycle_tower_on_scroll, select_tower_by_key, update_dock_selection, handle_dock_slot_click, draw_tower_ranges, PlaceTower};
+use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, select_tower_by_key, update_dock_selection, handle_dock_slot_click, draw_tower_ranges, PlaceTower};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
 use level_select::{scan_available_levels, setup_level_select, navigate_level_select, update_level_select_visuals, handle_level_button_click};
 use game_over::{setup_game_over, handle_game_over_input};
 use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied, deduct_gold_on_placement};
 use audio::AudioPlugin;
 use pause::PausePlugin;
+use input::InputPlugin;
 
 fn main() {
     App::new()
@@ -29,6 +31,7 @@ fn main() {
         .add_plugins(TilemapPlugin)
         .add_plugins(AudioPlugin)
         .add_plugins(PausePlugin)
+        .add_plugins(InputPlugin)
         .init_state::<GameState>()
         .init_resource::<AvailableLevels>()
         .add_message::<PlaceTower>()
@@ -82,7 +85,6 @@ fn main() {
             draw_tower_ranges,
         ).in_set(GameplaySet::Interaction))
         .add_systems(Update, (
-            cycle_tower_on_scroll,
             select_tower_by_key,
             update_dock_selection,
             handle_dock_slot_click,
