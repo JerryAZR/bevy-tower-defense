@@ -100,7 +100,7 @@ fn read_keyboard_for_actions(
 
 /// Reads mouse wheel and emits tower dock navigation actions.
 /// Only the first scroll event each frame is processed — one step per tick.
-fn read_mouse_for_actions(
+fn read_mouse_wheel(
     mut scroll: MessageReader<MouseWheel>,
     game_state: Res<State<GameState>>,
     mut actions: MessageWriter<GameAction>,
@@ -177,7 +177,7 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_message::<GameAction>()
-            .add_systems(Update, (read_keyboard_for_actions, read_mouse_for_actions))
+            .add_systems(Update, (read_keyboard_for_actions, read_mouse_wheel))
             .add_systems(Update, read_mouse_hover.run_if(in_state(GameState::InGame)))
             .add_systems(Update, read_mouse_click.run_if(in_state(GameState::InGame)));
     }

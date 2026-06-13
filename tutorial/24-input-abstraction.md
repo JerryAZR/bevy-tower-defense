@@ -1,22 +1,22 @@
-# Part 24: Input Abstraction — `GameAction` Events
+# Part 24: Input Abstraction — `GameAction` Events & Virtual Cursor
 
-> **Time to read:** ~14 minutes  
-> **New concepts:** logical input events, `MessageWriter` / `MessageReader` decoupling, context-dependent key mapping  
+> **Time to read:** ~18 minutes
+> **New concepts:** logical input events, virtual cursor resource, `CursorMoved` event, `MessageWriter` / `MessageReader` decoupling
 > **Prerequisite:** Part 23 (level select buttons)
 
 ---
 
 ## Recap: What We Already Have
 
-Five systems read raw device types directly — `Res<ButtonInput<KeyCode>>` in `navigate_level_select`, `select_tower_by_key`, `toggle_pause`, and `handle_game_over_input`, plus `MessageReader<MouseWheel>` in `cycle_tower_on_scroll`. Adding a gamepad (Part 25) would mean touching every one of these systems again. The input layer is coupled to specific hardware.
+Seven systems spread across five files read raw device types directly — `ButtonInput<KeyCode>`, `MouseWheel`, `ButtonInput<MouseButton>`, and `Single<&Window>` for cursor position. Adding a gamepad (Part 25) would mean touching every one of these systems again. The input layer is welded to specific hardware.
 
 ---
 
 ## Goal: What We Will Build
 
-Introduce a `GameAction` message — a logical vocabulary for player intent. Keyboard and mouse become *producers* of `GameAction` events. All game-logic systems become *consumers* of `GameAction` events. No game-logic file ever sees a `KeyCode` or `MouseWheel` again.
+Introduce a `GameAction` message for discrete actions (key presses, clicks, scroll) and a `VirtualCursorPos` resource for the shared cursor position (mouse, keyboard arrow, and eventually gamepad stick). Two new systems in `src/input.rs` form a **mouse compatibility layer**: `read_mouse_hover` updates the virtual cursor from `CursorMoved` events, and `read_mouse_click` emits `GameAction::Confirm` on left-click when the cursor is on a map tile.
 
-The game behaves identically. Scroll still cycles the tower dock. Arrow keys still navigate the level grid. The difference is that all physical-input code lives in one file (`src/input.rs`), and the rest of the codebase only knows about logical actions.
+By the end, no game-logic system touches a `KeyCode`, `MouseButton`, `MouseWheel`, or `Window` cursor query. Physical-input code lives in one file.
 
 ---
 
@@ -24,197 +24,182 @@ The game behaves identically. Scroll still cycles the tower dock. Arrow keys sti
 
 ### Logical input vs physical input
 
-Physical input says *which device* and *which key*:
-> "The user pressed KeyCode::Digit3 while in GameState::LevelSelect."
+Physical input says *which device* and *which key*. Logical input says *what the player intended to do*. The translation happens once, in one place. Every system downstream only sees the logical layer.
 
-Logical input says *what the player intended to do*:
-> "The player wants to select level index 2."
+If you're coming from Unity, this is the same idea as the **Input System** package (not the legacy Input Manager): define Action assets that map physical keys and gamepad buttons to named actions like "Jump" or "Fire", then subscribe to those actions in your MonoBehaviours. Our `GameAction` enum is Bevy's version of that Action map, and our reader systems are the binding layer.
 
-The translation from physical to logical happens once, in one place. Every system downstream only sees the logical layer.
+### `CursorMoved` event
 
-### `MessageWriter<M>` and `MessageReader<M>`
+Bevy emits a `CursorMoved` event every frame the mouse moves (with `position: Vec2` and `delta: Option<Vec2>`). This is the clean way to detect mouse movement — no position-comparison hack needed. Because it's a message event, multiple readers can consume it without interfering with each other.
 
-We've used these before (for `PlaceTower` and `PlaySound`), but now they become the backbone of the input system:
+### Virtual cursor as a resource
 
-- `MessageWriter<GameAction>` — the producer's handle; call `.write(action)` to enqueue an action.
-- `MessageReader<GameAction>` — the consumer's handle; call `.read()` to drain actions this frame.
-
-Because events are frame-scoped, actions fire exactly once per press — no "held button" spam.
+`VirtualCursorPos(Option<[u32; 2]>)` is a plain `Resource` that holds the tile coordinate the player is currently pointing at — regardless of which device moved it. Mouse writes it via `CursorMoved`, keyboard writes it via arrow-key `GameAction` events. All cursor-reading systems need only `Res<VirtualCursorPos>`.
 
 ---
 
 ## Walkthrough
 
-### Step 1: Define `GameAction` and `InputPlugin`
+### Step 1: `VirtualCursorPos` — the shared cursor resource
 
-Create `src/input.rs`. The `GameAction` enum captures every thing a player can *intend*:
+We place it in `src/tower.rs` because it stores a tile coordinate — a
+game-specific spatial concept — and `nudge_virtual_cursor`, which manipulates
+it, lives in the same file.  `input.rs` only pushes raw mouse data into it,
+the same way it writes `GameAction::Confirm` without owning `PlaceTower`.
 
 ```rust
-#[derive(Message, Debug, Clone)]
-pub enum GameAction {
-    Up, Down, Left, Right,          // 4-directional navigation
-    SelectTower(usize),             // number keys 1–5
-    SelectLevel(usize),             // number keys 1–9
-    NextTower, PrevTower,           // scroll wheel
-    Confirm,                        // Enter / Space
-    Cancel,                         // Escape
-}
+/// Virtual cursor — the tile coordinate shared by mouse, keyboard, and
+/// gamepad.  `read_mouse_hover` writes this every frame; gameplay systems
+/// read it instead of querying the cursor directly.
+#[derive(Resource, Default)]
+pub struct VirtualCursorPos(pub Option<[u32; 2]>);
 ```
 
-Notice what's *not* here: no `KeyCode`, no `MouseWheel`, no `GamepadButton`. This enum is device-agnostic by design. When Part 25 adds gamepad, the gamepad reader emits these same variants — no new variants needed.
-
-The `InputPlugin` bundles the message registration and the two reader systems:
+Seed it to the map centre when entering a level. In `spawn_placement_preview`, add a `map_layout` parameter and insert the resource:
 
 ```rust
-pub struct InputPlugin;
+commands.insert_resource(VirtualCursorPos(Some([
+    map_layout.width / 2,
+    map_layout.height / 2,
+])));
+```
 
-impl Plugin for InputPlugin {
-    fn build(&self, app: &mut App) {
-        app
-            .add_message::<GameAction>()
-            .add_systems(Update, (read_keyboard_for_actions, read_mouse_for_actions));
+This ensures the preview is visible immediately — no need to move the mouse first.
+
+### Step 2: `read_mouse_hover` — the mouse compatibility layer
+
+Add to `src/input.rs`. This system reads `CursorMoved` events (not raw cursor queries) and writes `VirtualCursorPos`:
+
+```rust
+fn read_mouse_hover(
+    camera: Single<(&Camera, &GlobalTransform)>,
+    map_layout: Res<MapLayout>,
+    mut kb_pos: ResMut<VirtualCursorPos>,
+    mut cursor_events: MessageReader<CursorMoved>,
+) {
+    // Only process the last cursor-move event of the frame.
+    let Some(event) = cursor_events.read().last() else { return; };
+
+    let (cam, cam_transform) = *camera;
+    let Ok(world) = cam.viewport_to_world_2d(cam_transform, event.position) else { return; };
+    if let Some(tile) = world_to_tile(world, map_layout.width, map_layout.height) {
+        kb_pos.0 = Some(tile);
     }
 }
 ```
 
-### Step 2: Keyboard → GameAction
+Using `.last()` on the event iterator guarantees we react to the cursor's final position this frame. The system is gated by `.run_if(in_state(GameState::InGame))` in the plugin registration so it never tries to access `MapLayout` during the level select screen.
 
-`read_keyboard_for_actions` reads `ButtonInput<KeyCode>` and writes `GameAction` events. The mapping is context-dependent because digit keys mean different things in different screens:
+### Step 3: `read_mouse_click` → `GameAction::Confirm`
+
+Also in `src/input.rs`. Left-click during `InGame` emits a `Confirm` action, but only when the cursor is on a map tile (so clicking empty space doesn't accidentally place a tower):
 
 ```rust
-fn read_keyboard_for_actions(
-    keys: Res<ButtonInput<KeyCode>>,
-    game_state: Res<State<GameState>>,
+fn read_mouse_click(
+    mouse: Res<ButtonInput<MouseButton>>,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    map_layout: Res<MapLayout>,
     mut actions: MessageWriter<GameAction>,
 ) {
-    // 4-directional — works in any state
-    if keys.just_pressed(KeyCode::ArrowUp)  { actions.write(GameAction::Up); }
-    // ... Down, Left, Right ...
+    if !mouse.just_pressed(MouseButton::Left) { return; }
 
-    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) {
+    let (cam, cam_transform) = *camera;
+    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok(world) = cam.viewport_to_world_2d(cam_transform, cursor) else { return; };
+    if world_to_tile(world, map_layout.width, map_layout.height).is_some() {
         actions.write(GameAction::Confirm);
     }
-    if keys.just_pressed(KeyCode::Escape) {
-        actions.write(GameAction::Cancel);
-    }
-
-    // Digits: context-dependent
-    match *game_state.get() {
-        GameState::InGame => {
-            for i in 0..5 {
-                if keys.just_pressed(DIGIT_KEYS[i]) {
-                    actions.write(GameAction::SelectTower(i));
-                }
-            }
-        }
-        GameState::LevelSelect => {
-            for i in 0..9 {
-                if keys.just_pressed(DIGIT_KEYS[i]) {
-                    actions.write(GameAction::SelectLevel(i));
-                }
-            }
-        }
-        _ => {}
-    }
 }
 ```
 
-A shared `DIGIT_KEYS` array avoids repeating the `KeyCode::Digit1`..`KeyCode::Digit9` boilerplate. The `match` on `GameState` ensures that pressing "3" in a level selects tower index 2, while pressing "3" on the level select screen selects level index 2.
-
-### Step 3: Mouse → GameAction
-
-`read_mouse_for_actions` replaces `cycle_tower_on_scroll`. It reads `MessageReader<MouseWheel>`, checks that we're in a level, and writes `NextTower` / `PrevTower`:
+Both systems are added to `InputPlugin::build` with `in_state(GameState::InGame)` conditions:
 
 ```rust
-fn read_mouse_for_actions(
-    mut scroll: MessageReader<MouseWheel>,
-    game_state: Res<State<GameState>>,
-    mut actions: MessageWriter<GameAction>,
-) {
-    if *game_state.get() != GameState::InGame { return; }
-    let Some(ev) = scroll.read().next() else { return; };
-    if ev.y < 0.0 { actions.write(GameAction::NextTower); }
-    else if ev.y > 0.0 { actions.write(GameAction::PrevTower); }
+.add_systems(Update, read_mouse_hover.run_if(in_state(GameState::InGame)))
+.add_systems(Update, read_mouse_click.run_if(in_state(GameState::InGame)))
+```
+
+### Step 4: `GameAction` — the logical input vocabulary
+
+Define the enum in `src/input.rs`. Variants capture intent, not hardware:
+
+```rust
+#[derive(Message)]
+pub enum GameAction {
+    Up, Down, Left, Right,
+    SelectTower(usize), SelectLevel(usize),
+    NextTower, PrevTower,
+    Confirm, Cancel,
 }
 ```
 
-The `cycle_tower_on_scroll` function is deleted — its logic moved here.
+- `Up/Down/Left/Right` — arrow keys (keyboard), D-pad (gamepad later)
+- `SelectTower(usize)` / `SelectLevel(usize)` — number-key shortcuts
+- `NextTower` / `PrevTower` — scroll wheel
+- `Confirm` — Enter, Space, mouse click, gamepad A
+- `Cancel` — Escape, gamepad B
 
-### Step 4: Refactor consumers
+### Step 5: Keyboard and scroll → `GameAction`
 
-Each game-logic system replaces its device-specific parameter with `MessageReader<GameAction>`.
+`read_keyboard_for_actions` reads `ButtonInput<KeyCode>` and emits actions. Digit keys are context-dependent (select tower in `InGame`, select level in `LevelSelect`). `read_mouse_wheel` reads `MouseWheel` and emits `NextTower` / `PrevTower`.
 
-**`select_tower_by_key` (`src/tower.rs`)** — absorbs scroll. Handles `SelectTower`, `NextTower`, `PrevTower`:
+The details are in `src/input.rs` — the key insight is that these two systems plus the two mouse systems form the **complete boundary** between hardware and game logic.
+
+### Step 6: Refactor consumers
+
+Each game-logic system that read raw input now reads `MessageReader<GameAction>` or `Res<VirtualCursorPos>` instead:
+
+| System | Before | After |
+|--------|--------|-------|
+| `select_tower_by_key` | `ButtonInput<KeyCode>` | `MessageReader<GameAction>` (SelectTower, NextTower, PrevTower) |
+| `navigate_level_select` | `ButtonInput<KeyCode>` | `MessageReader<GameAction>` (Up/Down/Left/Right, SelectLevel, Confirm) |
+| `toggle_pause` | `ButtonInput<KeyCode>` | `MessageReader<GameAction>` (Cancel) |
+| `handle_game_over_input` | `ButtonInput<KeyCode>` | `MessageReader<GameAction>` (Confirm, Cancel) |
+| `update_placement_preview` | `Window` + `Camera` | `Res<VirtualCursorPos>` |
+| `place_tower_on_click` | `MouseButton` + `Window` + `Camera` | `MessageReader<GameAction>` (Confirm) + `Res<VirtualCursorPos>` |
+| `draw_tower_ranges` | `Window` + `Camera` | `Res<VirtualCursorPos>` |
+| `cycle_tower_on_scroll` | `MouseWheel` | **deleted** — logic moved to `read_mouse_wheel` |
+| `hovered_placeable_tile` | `Window` | **deleted** — replaced by `tile_is_placeable` helper |
+
+### Step 7: `nudge_virtual_cursor` — keyboard cursor movement
+
+A new system in `src/tower.rs` that reads arrow-key `GameAction` events and moves `VirtualCursorPos` one tile per press. Clamped to map bounds; tile validity is checked downstream by `update_placement_preview` and `place_tower_on_click` via `tile_is_placeable`.
 
 ```rust
-pub fn select_tower_by_key(
+pub fn nudge_virtual_cursor(
     mut actions: MessageReader<GameAction>,
-    registry: Res<TowerRegistry>,
-    mut selected: ResMut<SelectedTowerType>,
+    map_layout: Res<MapLayout>,
+    mut cursor: ResMut<VirtualCursorPos>,
 ) {
-    let len = registry.towers.len();
-    for action in actions.read() {
-        match action {
-            GameAction::SelectTower(i) if *i < len => selected.0 = *i,
-            GameAction::NextTower if selected.0 + 1 < len => selected.0 += 1,
-            GameAction::PrevTower if selected.0 > 0 => selected.0 -= 1,
-            _ => {}
-        }
-    }
+    // ... match Up/Down/Left/Right, clamp to bounds ...
+    cursor.0 = Some([nx, ny]);
 }
 ```
 
-> `action` borrows the event data, so pattern-matched fields like `i` in `SelectTower(i)` are `&usize`. Use `*i` to compare and assign.
+This system belongs to the `GameplaySet::Interaction` set, so it only runs
+when `game_is_running` — i.e. during `InGame` with `PauseState::Running`.
 
-**`navigate_level_select` (`src/level_select.rs`)** — one action per frame to keep navigation math clean:
+This system does **not** touch the preview sprites — `update_placement_preview` (which runs after) reads `VirtualCursorPos` and handles the visual follow-through.
+### Step 8: `draw_cursor_highlight` — visual feedback
 
-```rust
-pub fn navigate_level_select(
-    mut actions: MessageReader<GameAction>,
-    // ...
-) {
-    let Some(action) = actions.read().next() else { return; };
-    match action {
-        GameAction::Up if row > 0 => focused.0 = focused.0.saturating_sub(COLS),
-        GameAction::Down if row + 1 < total_rows => focused.0 = (focused.0 + COLS).min(len - 1),
-        // ... Left, Right, SelectLevel, Confirm ...
-    }
-}
-```
+A new gizmo system that draws a translucent white rectangle on the tile under `VirtualCursorPos`. Separated from `draw_tower_ranges` because highlighting the cursor and drawing tower ranges are independent concerns.
 
-**`toggle_pause` (`src/pause.rs`)** — checks for any `Cancel` in the event stream:
-
-```rust
-fn toggle_pause(
-    mut actions: MessageReader<GameAction>,
-    // ...
-) {
-    if !actions.read().any(|a| matches!(a, GameAction::Cancel)) { return; }
-    // ... guard, toggle ...
-}
-```
-
-**`handle_game_over_input` (`src/game_over.rs`)** — `Confirm` or `Cancel` returns to level select. The prompt text updates from "Press Space to continue" to "Press Space / Enter / Escape to continue".
-
-### Step 5: Wire in `main.rs`
-
-Add `mod input;`, import `InputPlugin`, and register it alongside the other plugins. Remove `cycle_tower_on_scroll` from the tower import and from the `TowerDock` system set — it no longer exists.
-
-> **Run the game now.** Arrow keys navigate the level grid. Scroll cycles the tower dock. Escape pauses. Space dismisses the game-over screen. Digit keys 1–5 select towers, 1–9 select levels. Everything works as before — but no game-logic system touches `ButtonInput` or `MouseWheel`.
+> **Run the game now.** Arrow keys navigate the level grid. Arrow keys during a level move the preview — a white square highlights the cursor tile. The preview shows only on placeable tiles; hovering a path tile hides it. Mouse click or Enter places a tower at the cursor tile. Scroll cycles the tower dock. Escape pauses. Everything works — and no game-logic system touches raw input.
 
 ---
 
 ## Simplifications
 
-- **No gamepad yet.** `GameAction` has the right variants for gamepad (D-pad → `Up/Down/Left/Right`, A → `Confirm`, B → `Cancel`), but the gamepad reader system doesn't exist yet. That's Part 25.
-- **Mouse placement isn't abstracted.** `place_tower_on_click` still reads `ButtonInput<MouseButton>` and `Window`/`Camera` for coordinate conversion. Those are spatial queries that don't fit a `GameAction` event neatly. Part 25 will add placement via gamepad (preview nudge + A to place), keeping both mouse and gamepad paths working side by side.
-- **`read_keyboard_for_actions` checks `GameState` internally.** An alternative is to split it into three systems with `run_if(in_state(...))` conditions. The inline match is shorter for a tutorial but couples the reader to the state type.
+- **Gamepad not yet wired.** `GameAction` has the right variants (D-pad → `Up/Down/Left/Right`, A → `Confirm`, B → `Cancel`), but the gamepad reader doesn't exist yet. That's Part 25.
+- **`VirtualCursorPos` is tile-aligned.** Mouse positions are rounded to the nearest tile, so smooth sub-tile cursor movement is lost. Acceptable for a grid-based tower defense.
 
 ---
 
 ## Summary
 
-- **`GameAction` is a device-agnostic event enum** — keyboard, mouse, and gamepad all write the same variants.
-- **`MessageWriter<GameAction>`** is the producer handle; **`MessageReader<GameAction>`** is the consumer handle.
-- **Context-dependent mapping** (digits mean different things in different screens) is handled once in the reader, not scattered across consumers.
-- **Adding a new input device** (Part 25) requires adding one reader system; no game-logic files change.
+- **`GameAction`** decouples intent from hardware — keyboard, mouse, and gamepad all emit the same variants.
+- **`VirtualCursorPos`** is a shared resource for the cursor tile, written by mouse (`CursorMoved`) and keyboard (arrow-key actions).
+- **`MessageWriter` / `MessageReader`** form the producer/consumer pipeline for actions.
+- **Mouse compatibility layer** (`read_mouse_hover` + `read_mouse_click`) translates raw mouse input into the virtual cursor and confirm actions — gameplay systems never see a `MouseButton` or `Window`.
+- **`nudge_virtual_cursor`** moves the shared cursor one tile per arrow press; `update_placement_preview` follows visually.
