@@ -17,7 +17,7 @@ use state::{GameState, GameplaySet, game_is_running, AvailableLevels, spawn_came
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
 use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, cycle_tower_on_scroll, select_tower_by_key, update_dock_selection, handle_dock_slot_click, draw_tower_ranges, PlaceTower};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
-use level_select::{scan_available_levels, setup_level_select, handle_level_select_input};
+use level_select::{scan_available_levels, setup_level_select, navigate_level_select, update_level_select_visuals, handle_level_button_click};
 use game_over::{setup_game_over, handle_game_over_input};
 use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied, deduct_gold_on_placement};
 use audio::AudioPlugin;
@@ -44,8 +44,11 @@ fn main() {
             setup_level_select,
         ).chain())
         .add_systems(OnExit(GameState::LevelSelect), cleanup_screen_ui)
-        .add_systems(Update, handle_level_select_input
-            .run_if(in_state(GameState::LevelSelect)))
+        .add_systems(Update, (
+            navigate_level_select,
+            update_level_select_visuals,
+            handle_level_button_click,
+        ).run_if(in_state(GameState::LevelSelect)))
         // ---------- InGame ----------
         .add_systems(OnEnter(GameState::InGame), (
             load_level_data,
