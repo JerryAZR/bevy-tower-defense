@@ -32,6 +32,12 @@ pub enum GameState {
     GameOver,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, States, Default)]
+pub enum PauseState {
+    #[default]
+    Running,
+    Paused,
+}
 #[derive(Resource)]
 pub enum GameResult { Victory, Defeat }
 

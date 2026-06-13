@@ -9,10 +9,11 @@ mod level_select;
 mod game_over;
 mod economy;
 mod audio;
+mod pause;
 use bevy::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
-use state::{GameState, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
+use state::{GameState, PauseState, AvailableLevels, spawn_camera, cleanup_level, cleanup_screen_ui};
 use enemy::{spawn_wave_enemies, move_enemies, process_base_reachers, check_game_state};
 use tower::{setup_tower_atlas, spawn_placement_preview, update_placement_preview, place_tower_on_click, spawn_tower_from_event, attack_enemies, despawn_timed, refill_ammo, launch_rockets, move_projectiles, explode_projectiles, load_tower_registry, setup_tower_dock, cycle_tower_on_scroll, select_tower_by_key, update_dock_selection, handle_dock_slot_click, draw_tower_ranges, PlaceTower};
 use gameplay::{load_level_data, setup_spawn_schedule, spawn_tilemap};
@@ -20,12 +21,14 @@ use level_select::{scan_available_levels, setup_level_select, handle_level_selec
 use game_over::{setup_game_over, handle_game_over_input};
 use economy::{spawn_gold_hud, update_gold_hud, earn_passive_income, tick_placement_denied, deduct_gold_on_placement};
 use audio::AudioPlugin;
+use pause::PausePlugin;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
         .add_plugins(AudioPlugin)
+        .add_plugins(PausePlugin)
         .init_state::<GameState>()
         .init_resource::<AvailableLevels>()
         .add_message::<PlaceTower>()
@@ -59,7 +62,7 @@ fn main() {
             process_base_reachers,
             check_game_state,
             earn_passive_income,
-        ).chain().run_if(in_state(GameState::InGame)))
+        ).chain().run_if(in_state(GameState::InGame).and(in_state(PauseState::Running))))
         .add_systems(Update, (
             update_placement_preview,
             place_tower_on_click,
@@ -69,13 +72,13 @@ fn main() {
             update_gold_hud,
             tick_placement_denied,
             draw_tower_ranges,
-        ).run_if(in_state(GameState::InGame)))
+        ).run_if(in_state(GameState::InGame).and(in_state(PauseState::Running))))
         .add_systems(Update, (
             cycle_tower_on_scroll,
             select_tower_by_key,
             update_dock_selection,
             handle_dock_slot_click,
-        ).run_if(in_state(GameState::InGame)))
+        ).run_if(in_state(GameState::InGame).and(in_state(PauseState::Running))))
         // ---------- GameOver ----------
         .add_systems(OnEnter(GameState::GameOver), setup_game_over)
         .add_systems(OnExit(GameState::GameOver), cleanup_screen_ui)
