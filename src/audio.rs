@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::audio::Volume;
 use bevy::ecs::message::MessageReader;
-
+use crate::state::GameState;
 // ---------------------------------------------------------------------------
 // audio assets — loaded once during startup
 // ---------------------------------------------------------------------------
@@ -95,5 +95,23 @@ pub fn play_sound_effects(
             AudioPlayer::new(handle),
             PlaybackSettings::DESPAWN.with_volume(Volume::Linear(event.volume)),
         ));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AudioPlugin — bundles all audio systems into a self-contained unit
+// ---------------------------------------------------------------------------
+
+pub struct AudioPlugin;
+
+impl Plugin for AudioPlugin {
+    fn build(&self, app: &mut App) {
+        app
+            .add_message::<PlaySound>()
+            .add_systems(Startup, load_audio_assets)
+            .add_systems(OnEnter(GameState::InGame), start_background_music)
+            .add_systems(OnExit(GameState::InGame), stop_background_music)
+            .add_systems(Update, play_sound_effects
+                .run_if(in_state(GameState::InGame)));
     }
 }
