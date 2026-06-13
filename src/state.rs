@@ -38,6 +38,27 @@ pub enum PauseState {
     Running,
     Paused,
 }
+
+/// Named system sets for the gameplay phase.
+/// `configure_sets` applies the `game_is_running` condition once,
+/// instead of repeating it on every `.add_systems` chain.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GameplaySet {
+    /// FixedUpdate: enemies, towers, economy.
+    Simulation,
+    /// Update: placement preview, tower placement, HUD, gizmos.
+    Interaction,
+    /// Update: scroll, number keys, click on the tower dock.
+    TowerDock,
+}
+
+/// Returns `true` when the player is in a level and the game is not paused.
+pub fn game_is_running(
+    game_state: Res<State<GameState>>,
+    pause_state: Res<State<PauseState>>,
+) -> bool {
+    *game_state.get() == GameState::InGame && *pause_state.get() == PauseState::Running
+}
 #[derive(Resource)]
 pub enum GameResult { Victory, Defeat }
 
